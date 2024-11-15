@@ -39,6 +39,7 @@ The tech stack here is composed of the following elements, each one is an indivi
 6. Go to `http://${your_server_ip}:81` to enter Nginx Proxy Manager GUI
     + Default credentials are `admin@example.ch` and `changeme`
     + Create a first admin user and **change the password**
+    + Configure static file serving at your `ASSETS_DIR`
     + Go to `Hosts >> Proxy hosts` and configure:
         - http for `filebrowser` at port `80`
         - http for `dialectica-server` at port `8000`
