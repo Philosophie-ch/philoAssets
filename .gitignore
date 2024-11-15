@@ -50,7 +50,6 @@ filebrowser/uploads/
 # NGINX and Docker volumes
 nginx-proxy-manager/data/
 nginx-proxy-manager/letsencrypt/
-filebrowser/assets/
 rust-server/data/
 
 # Rust build artifacts
