@@ -10,7 +10,6 @@ services:
     volumes:
       - ./nginx-proxy-manager/data:/data
       - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
-    user: "${UID}:${GID}"
     networks:
       - philo-assets-network
 
@@ -21,6 +20,7 @@ services:
       - "8080:80"
     volumes:
       - ${ASSETS_DIR}:/srv
+      - ./filebrowser/database.db:/database.db  # Keep an empty file here so the app can have the correct permissions
     environment:
       FB_BASEURL: /
     user: "${UID}:${GID}"
