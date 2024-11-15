@@ -1,0 +1,78 @@
+# Node.js dependencies
+node_modules/
+
+# Yarn or NPM lock files
+yarn.lock
+package-lock.json
+
+# Docker build artifacts
+.docker/
+
+# Compiled and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Build directories
+dist/
+build/
+
+# IDE and editor specific files
+.vscode/
+.idea/
+
+# Temporary files
+*.~*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Coverage reports
+coverage/
+
+# Docker container and image files
+docker-compose.override.yml
+docker-compose.*.yml
+docker-compose.*.json
+
+# Test output
+test-output/
+
+# FileBrowser data and configuration
+filebrowser/.filebrowser/
+filebrowser/config.json
+filebrowser/uploads/
+
+# NGINX and Docker volumes
+nginx-proxy-manager/data/
+nginx-proxy-manager/letsencrypt/
+filebrowser/assets/
+rust-server/data/
+
+# Rust build artifacts
+target/
+Cargo.lock
+Cargo.toml.orig
+
+# SSL certificates and keys
+*.pem
+*.key
+*.crt
+
+# System-specific files (macOS, Windows)
+.DS_Store
+
+# IDE workspace files
+*.iml
+*.sublime-workspace
+
+# Docker machine and volume files
+docker-machine/
+docker-volume/
+
+# Logs
+*.log
