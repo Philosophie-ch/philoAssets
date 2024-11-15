@@ -43,6 +43,7 @@ docker-compose.*.json
 test-output/
 
 # FileBrowser data and configuration
+filebrowser/database.db
 filebrowser/.filebrowser/
 filebrowser/config.json
 filebrowser/uploads/
