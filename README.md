@@ -33,14 +33,16 @@ The tech stack here is composed of the following elements, each one is an indivi
     + `ASSETS_DIR`: path to your assets directory. Can be anywhere, but you might want to mount a dedicated volume for this
     + `UID`: if running as non-root, the user ID of the non-root user; get it with `id ${USER}`
     + `GID`: if running as non-root, the group ID of the non-root user; get it with `id ${USER}`
-4. Run `docker compose up`
-5. Go to `http://${your_server_ip}:81` to enter Nginx Proxy Manager GUI
+4. Create an empty file for FileBrowser's database: `touch filebrowser/database.db`
+    - **IMPORTANT**! Otherwise the FileBrowser container will fail as docker compose doesn't correctly create this as a file (but as a directory, if no file is found)
+5. Run `docker compose up`
+6. Go to `http://${your_server_ip}:81` to enter Nginx Proxy Manager GUI
     + Default credentials are `admin@example.ch` and `changeme`
     + Create a first admin user and **change the password**
     + Go to `Hosts >> Proxy hosts` and configure:
         - http for `filebrowser` at port `80`
         - http for `dialectica-server` at port `8000`
         - Recommended: enable caching, block of common exploits, and in SSL, force SSL and HTTP/2
-6. Go to the URL assigned to `filebrowser`
+7. Go to the URL assigned to `filebrowser`
     + Login for the first time with `admin` and `admin`
     + **Change the password of the admin user** and create more users as needed
