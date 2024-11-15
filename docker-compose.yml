@@ -27,11 +27,11 @@ services:
     networks:
       - philo-assets-network
 
-  rust-server:
+  dialectica-server:
     build:
-      context: ./rust-server
+      context: ./dialectica-server
       dockerfile: Dockerfile
-    container_name: rust-server
+    container_name: dialectica-server
     volumes:
       - ${ASSETS_DIR}/dialectica:/var/www/assets/dialectica:ro
     user: "${UID}:${GID}"
