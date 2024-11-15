@@ -8,7 +8,7 @@ async fn main() -> std::io::Result<()> {
             // Serve static files from /var/www/assets/dltc
             .service(fs::Files::new("/", "/var/www/assets/dialectica").index_file("index.html"))
     })
-    .bind("127.0.0.1:8000")? // Port matches NGINX config
+    .bind("127.0.0.1:8000")? // Port must match NGINX config and Dockerfile
     .run()
     .await
 }

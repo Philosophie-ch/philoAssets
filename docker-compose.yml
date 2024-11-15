@@ -16,8 +16,6 @@ services:
   filebrowser:
     image: filebrowser/filebrowser
     container_name: filebrowser
-    ports:
-      - "8080:80"
     volumes:
       - ${ASSETS_DIR}:/srv
       - ./filebrowser/database.db:/database.db  # Keep an empty file here so the app can have the correct permissions
