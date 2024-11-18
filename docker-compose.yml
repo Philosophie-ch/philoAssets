@@ -10,6 +10,7 @@ services:
     volumes:
       - ./nginx-proxy-manager/data:/data
       - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
+      - ${ASSETS_DIR}:/static-assets
     networks:
       - philo-assets-network
 
