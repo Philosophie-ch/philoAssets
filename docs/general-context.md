@@ -6,7 +6,7 @@ PhiloAssets is a containerized static asset management and serving system for Ph
 
 ## Architecture
 
-The system consists of four Docker containers communicating over a private bridge network (`philo-assets-network`):
+The system consists of three Docker containers communicating over a private bridge network (`philo-assets-network`):
 
 ```
 Internet (ports 80, 443)
@@ -20,13 +20,13 @@ Internet (ports 80, 443)
 └─────────────┬───────────────────────┘
               │
     ┌─────────┼─────────┬─────────────┐
-    ▼         ▼         ▼             ▼
-┌────────┐ ┌────────┐ ┌────────────┐ ┌─────────────┐
-│ Nginx  │ │ File   │ │ Dialectica │ │   Assets    │
-│ Static │ │Browser │ │   Server   │ │   Volume    │
-│        │ │        │ │   (Rust)   │ │             │
-│port 80 │ │  GUI   │ │  port 8000 │ │ /ASSETS_DIR │
-└────────┘ └────────┘ └────────────┘ └─────────────┘
+    ▼         ▼         ▼             │
+┌────────┐ ┌────────┐ ┌─────────────┐ │
+│ Nginx  │ │ File   │ │   Assets    │ │
+│ Static │ │Browser │ │   Volume    │ │
+│        │ │        │ │             │ │
+│port 80 │ │  GUI   │ │ /ASSETS_DIR │ │
+└────────┘ └────────┘ └─────────────┘ │
 ```
 
 ### Services
@@ -36,7 +36,6 @@ Internet (ports 80, 443)
 | **nginx-proxy-manager** | Entry point, reverse proxy, SSL management | jc21/nginx-proxy-manager |
 | **nginx-static** | High-performance static file serving | nginx:latest |
 | **filebrowser** | Web-based file management interface | filebrowser/filebrowser |
-| **dialectica-server** | Custom asset serving for Dialectica | Rust (Actix-web) |
 
 ## Directory Structure
 
@@ -50,11 +49,6 @@ philoAssets/
 ├── nginx-static/
 │   └── default.conf            # Nginx config with MIME types
 │
-├── dialectica-server/
-│   ├── Cargo.toml              # Rust dependencies
-│   ├── Dockerfile              # Container build
-│   └── src/main.rs             # Server implementation
-│
 ├── filebrowser/
 │   └── database.db             # FileBrowser state (SQLite)
 │
@@ -63,7 +57,6 @@ philoAssets/
 │   └── letsencrypt/            # SSL certificates
 │
 ├── assets/                     # Static file storage
-│   └── dialectica/             # Dialectica-specific files
 │
 └── docs/                       # Documentation
     └── general-context.md      # This file
@@ -73,7 +66,7 @@ philoAssets/
 
 ### docker-compose.yml
 
-Defines all four services with their:
+Defines all three services with their:
 - Container images and build contexts
 - Port mappings (only NPM exposes ports publicly)
 - Volume mounts for data persistence
@@ -139,7 +132,6 @@ Containers are ephemeral; all persistent data lives on the host.
 |--------|-----------------|---------|
 | `assets.domain.com` | nginx-static | Public file access |
 | `fb-assets.domain.com` | filebrowser | File management |
-| `dialectica.domain.com` | dialectica-server | Dialectica assets |
 
 ## Technology Stack
 
@@ -147,7 +139,6 @@ Containers are ephemeral; all persistent data lives on the host.
 - **Reverse Proxy**: Nginx Proxy Manager (Node.js-based)
 - **Static Server**: Nginx
 - **File Manager**: FileBrowser
-- **Custom Backend**: Rust with Actix-web 4.0
 - **SSL**: Let's Encrypt (auto-managed by NPM)
 
 ## Supported File Types
@@ -184,13 +175,6 @@ docker compose logs -f              # All services
 docker compose logs -f nginx-static # Specific service
 ```
 
-### Rebuilding Dialectica Server
-
-```bash
-docker compose build dialectica-server
-docker compose up -d dialectica-server
-```
-
 ### Managing Files
 
 - Use FileBrowser web interface for upload/download/management
@@ -201,4 +185,3 @@ docker compose up -d dialectica-server
 - [README.md](../README.md) - Detailed setup instructions
 - [Nginx Proxy Manager Docs](https://nginxproxymanager.com/)
 - [FileBrowser Docs](https://filebrowser.org/)
-- [Actix-web Docs](https://actix.rs/)

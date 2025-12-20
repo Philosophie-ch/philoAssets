@@ -38,18 +38,6 @@ services:
     networks:
       - philo-assets-network
 
-  # Dialectica Server
-  dialectica-server:
-    build:
-      context: ./dialectica-server
-      dockerfile: Dockerfile
-    container_name: dialectica-server
-    volumes:
-      - ${ASSETS_DIR}/dialectica:/var/www/assets/dialectica:ro
-    user: "${UID}:${GID}"
-    networks:
-      - philo-assets-network
-
 networks:
   philo-assets-network:
     driver: bridge

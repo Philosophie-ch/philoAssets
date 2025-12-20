@@ -21,11 +21,6 @@ The tech stack here is composed of the following elements, each one running in a
     + Easy uploads and downloads
     + User management system
 
-- **Dialectica Server**: simple backend server to provide custom routing for Dialectica's assets. Features:
-    + Backend only, no GUI
-    + Written in Rust for performance
-    + Source code and Dockerfile at `dialectica-server`
-
 - **Notes**:
     + The container's ports are not exposed to the internet, nor mapped to the server's ports (except for the NPM ports). Instead, they are exposed to the host machine, and then proxied by Nginx Proxy Manager. This is a more secure setup and it is recommended to keep it this way.
     + All data is decoupled from this tech stack. This means that everything you configure (users in the apps, SSL certs, actual asset files) will persist even if you kill the containers. This implies you need a manual configuration step the first time you run this and back them up on your own, see below.
@@ -44,8 +39,7 @@ The tech stack here is composed of the following elements, each one running in a
 
 4. Create certain files and folders with the user that will run the containers, to manage permissions correctly
     + An empty file for FileBrowser's database: `touch filebrowser/database.db`
-    + An empty folder for Dialectica's assets: `mkdir ${ASSETS_DIR}/dialectica`
-    **IMPORTANT**! If you don't do this, docker compose will create `filebrowser/database.db` as a folder, and `${ASSETS_DIR}/dialectica` as owned by `root`, both of which will cause issues to the services. If you forgot to do this, it's enough to just delete `filebrowser/database.db` and create an empty file as above, and run `sudo chown -R ${UID}:${GID} ${ASSETS_DIR}/dialectica` to fix the permissions
+    **IMPORTANT**! If you don't do this, docker compose will create `filebrowser/database.db` as a folder, which will cause issues to FileBrowser. If you forgot to do this, it's enough to just delete `filebrowser/database.db` and create an empty file as above
 
 5. Run `docker compose up -d`
 
@@ -60,7 +54,6 @@ The tech stack here is composed of the following elements, each one running in a
     + Go to `Hosts >> Proxy hosts` and configure:
         - http for `nginx-static` at port `80`
         - http for `filebrowser` at port `80`
-        - http for `dialectica-server` at port `8000`
         - Recommended for all above: enable caching, block of common exploits, and in SSL, force SSL and HTTP/2
         - NPM will allow you to create a SSL certificate for each one during the setup, and then these will be auto-renewed
 
@@ -72,17 +65,15 @@ The tech stack here is composed of the following elements, each one running in a
 
 ## Example
 
-1. Create three subdomains:
+1. Create two subdomains:
     + `assets.mydomain.com`
     + `fb-assets.mydomain.com`
-    + `dialectica-assets.mydomain.com`
 
 2. Go through steps 1 to 6 as explained above. On step 7, in your own Nginx Proxy Manager, configure each subdomain to point to the respective service:
-    + `assets.mydomain.com` → `filebrowser`
+    + `assets.mydomain.com` → `nginx-static`
     + `fb-assets.mydomain.com` → `filebrowser`
-    + `dialectica-assets.mydomain.com` → `dialectica-server`
 
-3. You are now set. A way to use this stack is to use FileBrowser to upload files (as explained in step 8 above), and then you'll automatically get matching URLs for them in the other two services. For example, if you upload a file `my-file.pdf` in FileBrowser, it will be available in the internet as `assets.mydomain.com/my-file.pdf`. And if you use the `dialectica` folder and upload there `my-paper.pdf`, you'll get the working URL  `dialectica-assets.mydomain.com/my-paper.pdf`.
+3. You are now set. Use FileBrowser to upload files (as explained in step 8 above), and then you'll automatically get matching URLs for them via the static server. For example, if you upload a file `my-file.pdf` in FileBrowser, it will be available on the internet as `assets.mydomain.com/my-file.pdf`.
 
 
 ## Maintenance
