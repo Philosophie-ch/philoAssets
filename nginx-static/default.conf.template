@@ -6,7 +6,7 @@ server {
     index index.html;
 
     # Health/mode check endpoint - no auth required
-    # Returns the current access mode for Portal auto-detection
+    # Returns the current access mode for client auto-detection
     location = /.well-known/access-mode {
         default_type text/plain;
         return 200 'signed_url';
