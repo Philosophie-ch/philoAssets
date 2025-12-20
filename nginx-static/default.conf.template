@@ -5,12 +5,36 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    # Serve static files
+    # Health/mode check endpoint - no auth required
+    # Returns the current access mode for Portal auto-detection
+    location = /.well-known/access-mode {
+        default_type text/plain;
+        return 200 'signed_url';
+    }
+
+    # Serve static files with signed URL validation
     location / {
+        # Signed URL validation using nginx secure_link module
+        # URL format: /path/to/file.pdf?md5=HASH&expires=TIMESTAMP
+        secure_link $arg_md5,$arg_expires;
+        secure_link_md5 "$secure_link_expires$uri ${ASSETS_SIGNING_SECRET}";
+
+        # Invalid or missing signature
+        if ($secure_link = "") {
+            return 403;
+        }
+
+        # Expired link
+        if ($secure_link = "0") {
+            return 410;
+        }
+
+        # Valid signature - serve the file
         try_files $uri $uri/ =404;
         charset utf-8;
+
         types {
-                    # Image types
+            # Image types
             image/jpeg jpeg jpg;
             image/png png;
             image/gif gif;
@@ -42,7 +66,8 @@ server {
         }
     }
 
-    # Security headers (optional)
+    # Security headers
     add_header X-Content-Type-Options nosniff;
     add_header X-XSS-Protection "1; mode=block";
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet";
 }
