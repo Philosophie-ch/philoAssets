@@ -132,7 +132,7 @@ Containers are ephemeral; all persistent data lives on the host.
 
 | Domain | Backend Service | Purpose |
 |--------|-----------------|---------|
-| `assets.domain.com` | nginx-static | Public file access |
+| `assets.domain.com` | nginx-static | Signed URL file access |
 | `fb-assets.domain.com` | filebrowser | File management |
 
 ## Technology Stack
@@ -161,7 +161,8 @@ The nginx-static service is configured to serve:
 - robots.txt in assets directory blocks crawlers
 - SSL/HTTPS enforced through NPM configuration
 - File permissions managed via UID/GID environment variables
-- Asset volumes mounted read-only where write access is not needed
+- Asset volumes for `nginx-static` are mounted read-only (serving-only access)
+- Asset volumes for FileBrowser are mounted read-write for upload and management
 
 ## Signed URL Format
 

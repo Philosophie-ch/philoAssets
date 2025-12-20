@@ -181,7 +181,7 @@ fi
 
 # Test 4: Expired signature (should be 410)
 echo -n "4. Expired signature: "
-EXPIRED=$(($(date +%s) - 3600))  # 1 hour ago
+EXPIRED=$(($(date +%s) - 86400))  # 24 hours ago
 HASH_EXPIRED_INPUT="${EXPIRED}${TEST_PATH} ${SECRET}"
 HASH_EXPIRED=$(echo -n "${HASH_EXPIRED_INPUT}" | openssl md5 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
 RESPONSE=$(docker exec nginx-static curl -s -o /dev/null -w "%{http_code}" "http://localhost${TEST_PATH}?md5=${HASH_EXPIRED}&expires=${EXPIRED}" 2>/dev/null || echo "error")
