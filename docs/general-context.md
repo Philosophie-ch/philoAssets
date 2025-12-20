@@ -47,7 +47,7 @@ philoAssets/
 ├── README.md                   # Setup and usage guide
 │
 ├── nginx-static/
-│   └── default.conf            # Nginx config with MIME types
+│   └── default.conf.template   # Nginx config template (envsubst processed)
 │
 ├── filebrowser/
 │   └── database.db             # FileBrowser state (SQLite)
@@ -82,12 +82,14 @@ Environment variables consumed by docker-compose:
 | `ASSETS_DIR` | Absolute path to the assets directory |
 | `UID` | User ID for container processes |
 | `GID` | Group ID for container processes |
+| `ASSETS_SIGNING_SECRET` | Shared secret for signed URL validation |
 
-### nginx-static/default.conf
+### nginx-static/default.conf.template
 
 Configures the static file server:
+- **Signed URL validation** using nginx `secure_link` module
 - MIME type mappings for all supported file types
-- Security headers (X-Content-Type-Options, X-XSS-Protection)
+- Security headers (X-Content-Type-Options, X-XSS-Protection, X-Robots-Tag)
 - UTF-8 charset encoding
 
 ## Network Architecture
@@ -152,11 +154,37 @@ The nginx-static service is configured to serve:
 
 ## Security Considerations
 
+- **Signed URLs required**: All asset requests must include valid `md5` and `expires` query parameters
 - NPM admin interface (port 81) should only be accessed via SSH tunnel
 - Security headers prevent MIME sniffing and XSS attacks
+- X-Robots-Tag header blocks search engine indexing
+- robots.txt in assets directory blocks crawlers
 - SSL/HTTPS enforced through NPM configuration
 - File permissions managed via UID/GID environment variables
 - Asset volumes mounted read-only where write access is not needed
+
+## Signed URL Format
+
+Assets are accessed via time-limited signed URLs:
+
+```
+https://assets.domain.com/path/to/file.pdf?md5=HASH&expires=TIMESTAMP
+```
+
+- `md5`: Base64URL-encoded MD5 hash of `{expires}{uri} {secret}`
+- `expires`: Unix timestamp (seconds since epoch)
+- Default expiry: 24 hours (compatible with Cloudflare CDN caching)
+
+The Portal generates these URLs using a shared secret (`ASSETS_SIGNING_SECRET`).
+
+### Response Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Valid signature, file served |
+| 403 | Invalid or missing signature |
+| 410 | Expired signature |
+| 404 | File not found |
 
 ## Common Operations
 
