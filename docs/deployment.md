@@ -6,7 +6,7 @@
 2. Access NPM GUI via SSH tunnel: `ssh -L 8080:localhost:81 user@server`
 3. Configure proxy hosts in NPM for nginx-static and filebrowser
 4. Change FileBrowser admin password
-5. **Save the `ASSETS_SIGNING_SECRET`** — Portal needs the same value
+5. **Save the `ASSETS_SIGNING_SECRET`** — client applications need the same value
 
 ## Redeployment (Config Changes)
 

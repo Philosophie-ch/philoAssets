@@ -1,7 +1,6 @@
 # Philosophie.ch's Assets Tech Stack
 
-Dockerized services to provide a management system for Philosophie.ch's assets.
-
+Dockerized services to provide a secure management system for Philosophie.ch's assets.
 
 ## Explanation
 
@@ -12,14 +11,15 @@ The tech stack here is composed of the following elements, each one running in a
     + Proxy Hosts (reverse proxy setup): easy setup of proxy hosts for apps running locally in the back
     + Caching, security headers, and other features
 
-- **Nginx Static**: serves static files. Features:
-    + Fast and efficient
-    + Easy to configure
-    + Auto-reloads when files change
+- **Nginx Static**: serves static files with signed URL validation. Features:
+    + **Signed URLs required** — all requests must include valid `md5` hash and `expires` timestamp
+    + Security headers block search engine indexing (X-Robots-Tag)
+    + Fast and efficient serving via nginx
 
 - **FileBrowser**: provides a simple GUI interface to manage static files. Features:
     + Easy uploads and downloads
     + User management system
+    + REST API for programmatic uploads
 
 - **Notes**:
     + The container's ports are not exposed to the internet, nor mapped to the server's ports (except for the NPM ports). Instead, they are exposed to the host machine, and then proxied by Nginx Proxy Manager. This is a more secure setup and it is recommended to keep it this way.
@@ -32,35 +32,63 @@ The tech stack here is composed of the following elements, each one running in a
 
 2. Clone this project in your server
 
-3. Create a `.env` file and fill the required environment variables:
-    + `ASSETS_DIR`: path to your assets directory. Can be anywhere, but you might want to mount a dedicated volume for this. Make sure that the user running the containers has read/write permissions to this directory
-    + `UID`: if running as non-root, the user ID of the non-root user; get it with `id ${USER}`
-    + `GID`: if running as non-root, the group ID of the non-root user; get it with `id ${USER}`
+3. Run the deployment script:
+    ```bash
+    ./deploy-secure.sh
+    ```
+    The script will:
+    + Create `.env` from `.env.example` (prompts you to edit it)
+    + Validate required variables:
+        - `ASSETS_DIR`: path to your assets directory (can be anywhere, but you might want a dedicated volume)
+        - `UID`: user ID of the non-root user running containers; get it with `id -u`
+        - `GID`: group ID of the non-root user; get it with `id -g`
+    + Generate `ASSETS_SIGNING_SECRET` for signed URLs
+    + Create `filebrowser/database.db`
+    + Start containers and run validation tests
 
-4. Create certain files and folders with the user that will run the containers, to manage permissions correctly
-    + An empty file for FileBrowser's database: `touch filebrowser/database.db`
-    **IMPORTANT**! If you don't do this, docker compose will create `filebrowser/database.db` as a folder, which will cause issues to FileBrowser. If you forgot to do this, it's enough to just delete `filebrowser/database.db` and create an empty file as above
+4. Using a secure method, bind `localhost:81` on your server to your local machine:
+    ```bash
+    ssh -L 8080:localhost:81 {server_user}@{server_ip}
+    ```
+    Then open a browser and go to `http://localhost:8080` for the Nginx Proxy Manager GUI.
 
-5. Run `docker compose up -d`
-
-6. Using a secure method, bind `localhost:81` on your server to your local machine, and open a browser. For example:
-    + `ssh -L 8080:localhost:81 {server_user}@{server_ip}`
-    + Then open a browser and go to `http://localhost:8080`, which will enter the Nginx Proxy Manager GUI
-    + NOTE: you can also use a VPN to access the server, or open the ports `81` in the server and access them directly. In any case, it is NOT recommended to expose port `81` (or wherever NPM is running) to the internet
-
-7. Once you're in the GUI:
+5. Once you're in the GUI:
     + Default credentials are `admin@example.ch` and `changeme`
     + Create a first admin user and **change the email and password**
     + Go to `Hosts >> Proxy hosts` and configure:
         - http for `nginx-static` at port `80`
         - http for `filebrowser` at port `80`
         - Recommended for all above: enable caching, block of common exploits, and in SSL, force SSL and HTTP/2
-        - NPM will allow you to create a SSL certificate for each one during the setup, and then these will be auto-renewed
 
-8. Go to the URL assigned to `filebrowser`
+6. Go to the URL assigned to `filebrowser`
     + Login for the first time with `admin` and `admin`
-    + **Change the password of the admin user** and create more users as needed
-    + Now you can upload files, rename them, delete them, etc., and you'll see the changes directly reflected in the files served by `nginx-static` server
+    + **Change the password of the admin user**
+
+7. **Save the `ASSETS_SIGNING_SECRET`** from the deploy script output — any client application needs this same value to generate valid signed URLs.
+
+See [docs/deployment.md](docs/deployment.md) for detailed checklist.
+
+
+## Signed URL Format
+
+All asset requests require signed URLs:
+
+```
+https://assets.mydomain.com/path/to/file.pdf?md5=HASH&expires=TIMESTAMP
+```
+
+- `md5`: Base64URL-encoded MD5 hash of `{expires}{uri} {secret}`
+- `expires`: Unix timestamp (seconds since epoch)
+- Default expiry: 24 hours (compatible with CDN caching)
+
+### Response Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Valid signature, file served |
+| 403 | Invalid or missing signature |
+| 410 | Expired signature |
+| 404 | File not found |
 
 
 ## Example
@@ -69,11 +97,9 @@ The tech stack here is composed of the following elements, each one running in a
     + `assets.mydomain.com`
     + `fb-assets.mydomain.com`
 
-2. Go through steps 1 to 6 as explained above. On step 7, in your own Nginx Proxy Manager, configure each subdomain to point to the respective service:
-    + `assets.mydomain.com` → `nginx-static`
-    + `fb-assets.mydomain.com` → `filebrowser`
+2. Run `./deploy-secure.sh` and configure NPM proxy hosts as explained above.
 
-3. You are now set. Use FileBrowser to upload files (as explained in step 8 above), and then you'll automatically get matching URLs for them via the static server. For example, if you upload a file `my-file.pdf` in FileBrowser, it will be available on the internet as `assets.mydomain.com/my-file.pdf`.
+3. Use FileBrowser to upload files. Client applications must generate signed URLs — direct URLs will return 403.
 
 
 ## Maintenance

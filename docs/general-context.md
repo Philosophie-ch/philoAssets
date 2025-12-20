@@ -175,7 +175,7 @@ https://assets.domain.com/path/to/file.pdf?md5=HASH&expires=TIMESTAMP
 - `expires`: Unix timestamp (seconds since epoch)
 - Default expiry: 24 hours (compatible with Cloudflare CDN caching)
 
-The Portal generates these URLs using a shared secret (`ASSETS_SIGNING_SECRET`).
+Client applications generate these URLs using a shared secret (`ASSETS_SIGNING_SECRET`).
 
 ### Response Codes
 
