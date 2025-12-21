@@ -29,21 +29,24 @@ if [ ! -f .env ]; then
     fi
 fi
 
-# Check required variables are set
-source .env
+# Check required variables are set (read directly to avoid UID readonly issue)
+ASSETS_DIR=$(grep "^ASSETS_DIR=" .env | cut -d'=' -f2-)
+ENV_UID=$(grep "^UID=" .env | cut -d'=' -f2-)
+ENV_GID=$(grep "^GID=" .env | cut -d'=' -f2-)
+
 if [ -z "$ASSETS_DIR" ] || [ "$ASSETS_DIR" = "/absolute/path/to/assets" ]; then
     echo -e "${RED}Error: ASSETS_DIR not configured in .env${NC}"
     echo -e "${YELLOW}Edit .env and set ASSETS_DIR to your assets directory path${NC}"
     exit 1
 fi
 
-if [ -z "$UID" ] || [ "$UID" = "YOUR_UID" ]; then
+if [ -z "$ENV_UID" ] || [ "$ENV_UID" = "YOUR_UID" ]; then
     echo -e "${RED}Error: UID not configured in .env${NC}"
     echo -e "${YELLOW}Run 'id -u' and set UID in .env${NC}"
     exit 1
 fi
 
-if [ -z "$GID" ] || [ "$GID" = "YOUR_GID" ]; then
+if [ -z "$ENV_GID" ] || [ "$ENV_GID" = "YOUR_GID" ]; then
     echo -e "${RED}Error: GID not configured in .env${NC}"
     echo -e "${YELLOW}Run 'id -g' and set GID in .env${NC}"
     exit 1
@@ -99,8 +102,8 @@ echo -e "${YELLOW}Secret (save this for client configuration):${NC}"
 echo -e "${GREEN}${SECRET}${NC}"
 echo ""
 
-# Load ASSETS_DIR from .env
-source .env
+# Reload ASSETS_DIR in case it changed (avoid source due to UID readonly issue)
+ASSETS_DIR=$(grep "^ASSETS_DIR=" .env | cut -d'=' -f2-)
 
 # Check robots.txt
 if [ -f "${ASSETS_DIR}/robots.txt" ]; then
