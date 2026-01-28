@@ -1,7 +1,7 @@
 services:
   # Reverse proxy manager
   nginx-proxy-manager:
-    image: jc21/nginx-proxy-manager:latest
+    image: jc21/nginx-proxy-manager:2.12.1
     container_name: nginx-proxy-manager
     restart: unless-stopped
     ports:
@@ -16,7 +16,7 @@ services:
 
   # Static files server with signed URL validation
   nginx-static:
-    image: nginx:latest
+    image: nginx:1.29.4
     container_name: nginx-static
     restart: unless-stopped
     environment:
@@ -29,7 +29,7 @@ services:
 
   # FileBrowser GUI + API
   filebrowser:
-    image: filebrowser/filebrowser
+    image: filebrowser/filebrowser:v2.31.2
     container_name: filebrowser
     volumes:
       - ${ASSETS_DIR}:/srv
