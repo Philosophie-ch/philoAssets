@@ -30,9 +30,10 @@ if [ ! -f .env ]; then
 fi
 
 # Check required variables are set (read directly to avoid UID readonly issue)
-ASSETS_DIR=$(grep "^ASSETS_DIR=" .env | cut -d'=' -f2-)
-ENV_UID=$(grep "^UID=" .env | cut -d'=' -f2-)
-ENV_GID=$(grep "^GID=" .env | cut -d'=' -f2-)
+# Using sed to handle values containing '=' (like base64)
+ASSETS_DIR=$(sed -n 's/^ASSETS_DIR=//p' .env)
+ENV_UID=$(sed -n 's/^UID=//p' .env)
+ENV_GID=$(sed -n 's/^GID=//p' .env)
 
 if [ -z "$ASSETS_DIR" ] || [ "$ASSETS_DIR" = "/absolute/path/to/assets" ]; then
     echo -e "${RED}Error: ASSETS_DIR not configured in .env${NC}"
@@ -75,7 +76,7 @@ if grep -q "^ASSETS_SIGNING_SECRET=" .env && ! grep -q "^ASSETS_SIGNING_SECRET=$
     read -p "Do you want to generate a new secret? (y/N): " regenerate
     if [ "$regenerate" != "y" ] && [ "$regenerate" != "Y" ]; then
         echo "Keeping existing secret"
-        SECRET=$(grep "^ASSETS_SIGNING_SECRET=" .env | cut -d'=' -f2)
+        SECRET=$(sed -n 's/^ASSETS_SIGNING_SECRET=//p' .env)
     else
         SECRET=$(openssl rand -base64 32)
         # Update existing secret
@@ -98,12 +99,25 @@ else
 fi
 
 echo ""
+
+# Verify the secret was stored correctly
+STORED_SECRET=$(sed -n 's/^ASSETS_SIGNING_SECRET=//p' .env)
+if [ "$SECRET" != "$STORED_SECRET" ]; then
+    echo -e "${RED}ERROR: Secret mismatch!${NC}"
+    echo -e "Expected: ${SECRET}"
+    echo -e "Stored:   ${STORED_SECRET}"
+    echo -e "${RED}Please check .env file manually${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Secret verified in .env${NC}"
+
+echo ""
 echo -e "${YELLOW}Secret (save this for client configuration):${NC}"
 echo -e "${GREEN}${SECRET}${NC}"
 echo ""
 
 # Reload ASSETS_DIR in case it changed (avoid source due to UID readonly issue)
-ASSETS_DIR=$(grep "^ASSETS_DIR=" .env | cut -d'=' -f2-)
+ASSETS_DIR=$(sed -n 's/^ASSETS_DIR=//p' .env)
 
 # Check robots.txt
 if [ -f "${ASSETS_DIR}/robots.txt" ]; then
@@ -134,65 +148,8 @@ echo ""
 echo -e "${YELLOW}Waiting for nginx to start...${NC}"
 sleep 3
 
-# Test signed URL generation and validation
-echo ""
-echo -e "${YELLOW}=== Testing Signed URLs ===${NC}"
-
-# Test file path (use robots.txt since we know it exists)
-TEST_PATH="/robots.txt"
-EXPIRES=$(($(date +%s) + 3600))  # 1 hour from now
-
-# Generate hash (same algorithm as nginx secure_link)
-# Format: MD5(expires + uri + " " + secret) -> base64url
-HASH_INPUT="${EXPIRES}${TEST_PATH} ${SECRET}"
-HASH=$(echo -n "${HASH_INPUT}" | openssl md5 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
-
-echo "Test path: ${TEST_PATH}"
-echo "Expires: ${EXPIRES}"
-echo "Hash: ${HASH}"
-echo ""
-
-# Test against nginx-static directly (internal network)
-echo -e "${YELLOW}Testing against nginx-static container...${NC}"
-
-# Test 1: Valid signed URL
-echo -n "1. Valid signed URL: "
-RESPONSE=$(docker exec nginx-static curl -s -o /dev/null -w "%{http_code}" "http://localhost${TEST_PATH}?md5=${HASH}&expires=${EXPIRES}" 2>/dev/null || echo "error")
-if [ "$RESPONSE" = "200" ]; then
-    echo -e "${GREEN}✓ 200 OK${NC}"
-else
-    echo -e "${RED}✗ Got ${RESPONSE} (expected 200)${NC}"
-fi
-
-# Test 2: Missing signature (should be 403)
-echo -n "2. Missing signature: "
-RESPONSE=$(docker exec nginx-static curl -s -o /dev/null -w "%{http_code}" "http://localhost${TEST_PATH}" 2>/dev/null || echo "error")
-if [ "$RESPONSE" = "403" ]; then
-    echo -e "${GREEN}✓ 403 Forbidden${NC}"
-else
-    echo -e "${RED}✗ Got ${RESPONSE} (expected 403)${NC}"
-fi
-
-# Test 3: Invalid signature (should be 403)
-echo -n "3. Invalid signature: "
-RESPONSE=$(docker exec nginx-static curl -s -o /dev/null -w "%{http_code}" "http://localhost${TEST_PATH}?md5=invalid&expires=${EXPIRES}" 2>/dev/null || echo "error")
-if [ "$RESPONSE" = "403" ]; then
-    echo -e "${GREEN}✓ 403 Forbidden${NC}"
-else
-    echo -e "${RED}✗ Got ${RESPONSE} (expected 403)${NC}"
-fi
-
-# Test 4: Expired signature (should be 410)
-echo -n "4. Expired signature: "
-EXPIRED=$(($(date +%s) - 86400))  # 24 hours ago
-HASH_EXPIRED_INPUT="${EXPIRED}${TEST_PATH} ${SECRET}"
-HASH_EXPIRED=$(echo -n "${HASH_EXPIRED_INPUT}" | openssl md5 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
-RESPONSE=$(docker exec nginx-static curl -s -o /dev/null -w "%{http_code}" "http://localhost${TEST_PATH}?md5=${HASH_EXPIRED}&expires=${EXPIRED}" 2>/dev/null || echo "error")
-if [ "$RESPONSE" = "410" ]; then
-    echo -e "${GREEN}✓ 410 Gone${NC}"
-else
-    echo -e "${RED}✗ Got ${RESPONSE} (expected 410)${NC}"
-fi
+# Run health checks
+./check.sh
 
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
