@@ -5,6 +5,9 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # Efficient file transfer
+    sendfile on;
+
     # Health/mode check endpoint - no auth required
     # Returns the current access mode for client auto-detection
     location = /.well-known/access-mode {
@@ -32,6 +35,9 @@ server {
         # Valid signature - serve the file
         try_files $uri $uri/ =404;
         charset utf-8;
+
+        # Cache-Control: 1 year (signed URLs handle invalidation)
+        add_header Cache-Control "public, max-age=31536000";
 
         types {
             # Image types
