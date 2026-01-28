@@ -116,6 +116,16 @@ This script keeps the existing signing secret and restarts containers with the n
 
 After redeployment, remember to **purge your CDN cache** (e.g., Cloudflare Dashboard → Caching → Purge Everything).
 
+### Health Check
+
+Run without redeploying to verify everything is working:
+
+```bash
+./check.sh
+```
+
+Checks: env vars, Docker containers, nginx config, signed URL validation.
+
 ### Backups
 
 - **Backups**: make sure to backup, at the very least, your assets directory, as the rest of the stack is easily reproducible and the manual configurations are easy to set up again.
