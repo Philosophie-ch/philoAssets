@@ -104,6 +104,20 @@ https://assets.mydomain.com/path/to/file.pdf?md5=HASH&expires=TIMESTAMP
 
 ## Maintenance
 
+### Redeployment (Config Changes)
+
+After making changes to config files (e.g., `nginx-static/default.conf.template`):
+
+```bash
+./redeploy.sh
+```
+
+This script keeps the existing signing secret and restarts containers with the new config. It also runs validation tests to ensure everything works.
+
+After redeployment, remember to **purge your CDN cache** (e.g., Cloudflare Dashboard → Caching → Purge Everything).
+
+### Backups
+
 - **Backups**: make sure to backup, at the very least, your assets directory, as the rest of the stack is easily reproducible and the manual configurations are easy to set up again.
     + You can do this by running `rsync -avz {server_user}@{server_ip}:{ASSETS_DIR} /path/to/backup` from your backup machine
     + If you want to backup the Nginx Proxy Manager configurations, you can do so by backing up the `nginx-proxy-manager` folder, which is created in the same directory as this project, in your server
