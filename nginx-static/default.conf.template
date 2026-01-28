@@ -8,6 +8,9 @@ server {
     # Efficient file transfer
     sendfile on;
 
+    # Allow location blocks to inherit server-level headers (nginx 1.29.3+)
+    add_header_inherit merge;
+
     # Health/mode check endpoint - no auth required
     # Returns the current access mode for client auto-detection
     location = /.well-known/access-mode {
@@ -74,6 +77,6 @@ server {
 
     # Security headers
     add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
+    # X-XSS-Protection removed - deprecated, can cause XSS vulnerabilities (OWASP)
     add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet";
 }
