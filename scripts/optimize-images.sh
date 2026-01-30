@@ -26,6 +26,7 @@ SIZE_THRESHOLD_BYTES=1048576  # 1MB in bytes
 MAX_DIMENSION=1920
 JPEG_QUALITY=85
 WEBP_QUALITY=85
+PNG_QUALITY="65-80"
 
 # Counters for summary
 TOTAL_ORIGINAL_SIZE=0
@@ -160,8 +161,13 @@ optimize_png() {
         -strip \
         "$output"
 
-    # Lossy compression with pngquant
-    if ! pngquant --force --quality=65-80 --output "$output" "$output" 2>/dev/null; then
+    # Lossy compression with pngquant (use temp file to avoid corruption on failure)
+    local tmp_png
+    tmp_png=$(mktemp "${output_dir}/.pngquant-XXXXXX.png")
+    if pngquant --force --quality="$PNG_QUALITY" --output "$tmp_png" "$output" 2>/dev/null; then
+        mv "$tmp_png" "$output"
+    else
+        rm -f "$tmp_png"
         log_warn "pngquant failed for $(basename "$output"), falling back to lossless only"
     fi
 
@@ -183,7 +189,8 @@ optimize_gif() {
     gifsicle --optimize=3 "$input" -o "$output"
 
     # Generate static WebP from first frame
-    local tmp_frame="${output}.tmp.png"
+    local tmp_frame
+    tmp_frame=$(mktemp "${output_dir}/.gifframe-XXXXXX.png")
     convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "$tmp_frame"
     cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
     rm -f "$tmp_frame"
@@ -272,7 +279,10 @@ check_dependencies
 
 # Convert to absolute paths
 INPUT_DIR=$(cd "$INPUT_DIR" && pwd)
-OUTPUT_DIR=$(cd "$(dirname "$OUTPUT_DIR")" && pwd)/$(basename "$OUTPUT_DIR")
+case "$OUTPUT_DIR" in
+    /*) ;;  # already absolute
+    *)  OUTPUT_DIR="$(pwd)/$OUTPUT_DIR" ;;
+esac
 if [ "$DRY_RUN" = false ]; then
     mkdir -p "$OUTPUT_DIR"
 fi
@@ -308,7 +318,7 @@ for image in "${IMAGES[@]}"; do
 
     # Check if already processed
     if [ -f "$output_path" ] && [ "$DRY_RUN" = false ]; then
-        ((SKIPPED_COUNT++))
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
@@ -319,7 +329,7 @@ for image in "${IMAGES[@]}"; do
         if [ "$DRY_RUN" = true ]; then
             dimensions=$(identify -format "%wx%h" "$image" 2>/dev/null | head -1)
             echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $original_size), ${dimensions})"
-            ((PROCESSED_COUNT++))
+            PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         else
             echo -ne "  Processing: $rel_path ... "
 
@@ -334,16 +344,16 @@ for image in "${IMAGES[@]}"; do
 
                 TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
                 TOTAL_OPTIMIZED_SIZE=$((TOTAL_OPTIMIZED_SIZE + new_size))
-                ((PROCESSED_COUNT++))
+                PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
 
                 echo -e "${GREEN}OK${NC} ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
             else
-                ((FAILED_COUNT++))
+                FAILED_COUNT=$((FAILED_COUNT + 1))
                 echo -e "${RED}FAILED${NC}"
             fi
         fi
     else
-        ((SKIPPED_COUNT++))
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     fi
 done
 
