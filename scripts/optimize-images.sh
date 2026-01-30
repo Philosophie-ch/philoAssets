@@ -11,7 +11,7 @@ set -e
 #   ./optimize-images.sh <input-folder> [output-folder] [--dry-run]
 #
 # Dependencies:
-#   sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp
+#   sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp bc
 # =============================================================================
 
 # Colors for output
@@ -25,12 +25,14 @@ NC='\033[0m' # No Color
 SIZE_THRESHOLD_BYTES=1048576  # 1MB in bytes
 MAX_DIMENSION=1920
 JPEG_QUALITY=85
+WEBP_QUALITY=85
 
 # Counters for summary
 TOTAL_ORIGINAL_SIZE=0
 TOTAL_OPTIMIZED_SIZE=0
 PROCESSED_COUNT=0
 SKIPPED_COUNT=0
+FAILED_COUNT=0
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -86,12 +88,13 @@ check_dependencies() {
     command -v pngquant >/dev/null 2>&1 || missing+=("pngquant")
     command -v gifsicle >/dev/null 2>&1 || missing+=("gifsicle")
     command -v cwebp >/dev/null 2>&1 || missing+=("webp")
+    command -v bc >/dev/null 2>&1 || missing+=("bc")
 
     if [ ${#missing[@]} -ne 0 ]; then
         log_error "Missing dependencies: ${missing[*]}"
         echo ""
         echo "Install with:"
-        echo "  sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp"
+        echo "  sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp bc"
         exit 1
     fi
 }
@@ -141,7 +144,7 @@ optimize_jpeg() {
     jpegoptim --quiet --strip-all "$output"
 
     # Generate WebP version
-    cwebp -q 85 -quiet "$output" -o "${output}.webp"
+    cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
 }
 
 optimize_png() {
@@ -158,13 +161,15 @@ optimize_png() {
         "$output"
 
     # Lossy compression with pngquant
-    pngquant --force --quality=65-80 --output "$output" "$output" 2>/dev/null || true
+    if ! pngquant --force --quality=65-80 --output "$output" "$output" 2>/dev/null; then
+        log_warn "pngquant failed for $(basename "$output"), falling back to lossless only"
+    fi
 
     # Lossless optimization
     optipng -quiet -o2 "$output"
 
     # Generate WebP version
-    cwebp -q 85 -quiet "$output" -o "${output}.webp"
+    cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
 }
 
 optimize_gif() {
@@ -178,7 +183,10 @@ optimize_gif() {
     gifsicle --optimize=3 "$input" -o "$output"
 
     # Generate static WebP from first frame
-    convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "${output}.webp"
+    local tmp_frame="${output}.tmp.png"
+    convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "$tmp_frame"
+    cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
+    rm -f "$tmp_frame"
 }
 
 optimize_webp() {
@@ -189,8 +197,8 @@ optimize_webp() {
     mkdir -p "$output_dir"
 
     # Resize and recompress
-    cwebp -q 85 -quiet -resize "$MAX_DIMENSION" 0 "$input" -o "$output" 2>/dev/null || \
-        cwebp -q 85 -quiet "$input" -o "$output"
+    cwebp -q "$WEBP_QUALITY" -quiet -resize "$MAX_DIMENSION" 0 "$input" -o "$output" 2>/dev/null || \
+        cwebp -q "$WEBP_QUALITY" -quiet "$input" -o "$output"
 }
 
 process_image() {
@@ -264,9 +272,9 @@ check_dependencies
 
 # Convert to absolute paths
 INPUT_DIR=$(cd "$INPUT_DIR" && pwd)
+OUTPUT_DIR=$(cd "$(dirname "$OUTPUT_DIR")" && pwd)/$(basename "$OUTPUT_DIR")
 if [ "$DRY_RUN" = false ]; then
     mkdir -p "$OUTPUT_DIR"
-    OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
 fi
 
 echo ""
@@ -282,8 +290,7 @@ log_info "Dry run: $DRY_RUN"
 echo ""
 
 # Find all images
-IMAGE_EXTENSIONS="-iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp'"
-mapfile -t IMAGES < <(eval "find '$INPUT_DIR' -type f \( $IMAGE_EXTENSIONS \)" 2>/dev/null)
+mapfile -t IMAGES < <(find "$INPUT_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null)
 
 if [ ${#IMAGES[@]} -eq 0 ]; then
     log_warn "No images found in $INPUT_DIR"
@@ -319,7 +326,11 @@ for image in "${IMAGES[@]}"; do
             if process_image "$image" "$output_path"; then
                 new_size=$(stat -c%s "$output_path" 2>/dev/null || stat -f%z "$output_path" 2>/dev/null)
                 savings=$((original_size - new_size))
-                savings_pct=$((savings * 100 / original_size))
+                if [ "$original_size" -gt 0 ]; then
+                    savings_pct=$((savings * 100 / original_size))
+                else
+                    savings_pct=0
+                fi
 
                 TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
                 TOTAL_OPTIMIZED_SIZE=$((TOTAL_OPTIMIZED_SIZE + new_size))
@@ -327,6 +338,7 @@ for image in "${IMAGES[@]}"; do
 
                 echo -e "${GREEN}OK${NC} ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
             else
+                ((FAILED_COUNT++))
                 echo -e "${RED}FAILED${NC}"
             fi
         fi
@@ -350,6 +362,9 @@ else
     log_success "Optimization complete!"
     log_info "Images processed: $PROCESSED_COUNT"
     log_info "Images skipped: $SKIPPED_COUNT"
+    if [ "$FAILED_COUNT" -gt 0 ]; then
+        log_warn "Images failed: $FAILED_COUNT"
+    fi
 
     if [ "$PROCESSED_COUNT" -gt 0 ]; then
         total_savings=$((TOTAL_ORIGINAL_SIZE - TOTAL_OPTIMIZED_SIZE))
@@ -372,6 +387,7 @@ else
             echo ""
             echo "Images processed: $PROCESSED_COUNT"
             echo "Images skipped: $SKIPPED_COUNT"
+            echo "Images failed: $FAILED_COUNT"
             echo "Original size: $(format_size $TOTAL_ORIGINAL_SIZE)"
             echo "Optimized size: $(format_size $TOTAL_OPTIMIZED_SIZE)"
             echo "Savings: $(format_size $total_savings) (-${savings_pct}%)"
