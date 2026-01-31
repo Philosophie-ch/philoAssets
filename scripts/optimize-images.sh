@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 SIZE_THRESHOLD_BYTES=1048576  # 1MB in bytes
 MAX_DIMENSION=1920
 JPEG_QUALITY=92
-WEBP_QUALITY=90
+WEBP_QUALITY=95
 AGGRESSIVE_QUALITY=75
 
 # Counters for summary
@@ -62,9 +62,8 @@ print_usage() {
     echo "  -f, --force             Re-optimize even if already marked as optimized"
     echo "  -s, --size-threshold <size>  Min file size to optimize (default: 1MB, e.g. 500KB, 2MB)"
     echo "  -j, --jobs <N>          Max parallel jobs (default: 3)"
-    echo "  -a, --aggressive        Second pass: convert large files to WebP for more savings"
+    echo "  -a, --aggressive        Aggressive mode: convert large optimized files to WebP"
     echo "  --aggressive-quality <N>  WebP quality for aggressive re-encode (default: 75)"
-    echo "  --aggressive-output <dir>  Output folder for aggressive pass (default: ./aggressive)"
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
@@ -73,8 +72,8 @@ print_usage() {
     echo "  $0 ./uploads -r -w                    # recursive + webp generation"
     echo "  $0 image1.png image2.jpg -o ./out      # optimize specific files"
     echo "  $0 ./uploads ./photos -r -o ./out      # multiple directories"
-    echo "  $0 ./uploads -a                         # optimize + aggressive WebP pass"
-    echo "  $0 ./uploads -a --aggressive-quality 60  # even more aggressive"
+    echo "  $0 ./optimized -a                        # aggressive pass on optimized output"
+    echo "  $0 ./optimized -a --aggressive-quality 60  # even more aggressive"
 }
 
 log_info() {
@@ -248,24 +247,34 @@ aggressive_compress() {
     local ext_lower
     ext_lower=$(echo "${input##*.}" | tr '[:upper:]' '[:lower:]')
 
-    # Step 1: Convert to WebP if not already
     local webp_output="${output%.*}.webp"
+    local quality=95
+
+    # Initial conversion to WebP at quality 95
     if [ "$ext_lower" != "webp" ]; then
-        cwebp -q "$WEBP_QUALITY" -quiet "$input" -o "$webp_output"
+        cwebp -q "$quality" -quiet "$input" -o "$webp_output"
     else
-        cp "$input" "$webp_output"
+        local tmp="${webp_output}.tmp"
+        cwebp -q "$quality" -quiet "$input" -o "$tmp"
+        mv "$tmp" "$webp_output"
     fi
 
-    # Step 2: If still above threshold, re-encode at lower quality
-    local size
-    size=$(stat -c%s "$webp_output" 2>/dev/null || stat -f%z "$webp_output" 2>/dev/null)
-    if [ "$size" -gt "$SIZE_THRESHOLD_BYTES" ]; then
-        local tmp_webp="${webp_output}.tmp"
-        cwebp -q "$AGGRESSIVE_QUALITY" -quiet "$webp_output" -o "$tmp_webp"
-        mv "$tmp_webp" "$webp_output"
-    fi
+    # Iteratively reduce quality (-5 each step) until below threshold or floor
+    local min_quality=$AGGRESSIVE_QUALITY
+    while [ "$quality" -gt "$min_quality" ]; do
+        local size
+        size=$(stat -c%s "$webp_output" 2>/dev/null || stat -f%z "$webp_output" 2>/dev/null)
+        if [ "$size" -le "$SIZE_THRESHOLD_BYTES" ]; then
+            break
+        fi
+        quality=$((quality - 5))
+        local tmp="${webp_output}.tmp"
+        cwebp -q "$quality" -quiet "$input" -o "$tmp"
+        mv "$tmp" "$webp_output"
+    done
 
     exiftool -overwrite_original -Comment="philoassets-aggressive" "$webp_output" >/dev/null 2>&1
+    echo "$quality"
 }
 
 process_single_aggressive() {
@@ -276,7 +285,9 @@ process_single_aggressive() {
     local original_size
     original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
 
-    if aggressive_compress "$image" "$output_path"; then
+    local final_quality
+    final_quality=$(aggressive_compress "$image" "$output_path")
+    if [ $? -eq 0 ] || [ -n "$final_quality" ]; then
         local webp_output="${output_path%.*}.webp"
         local new_size
         new_size=$(stat -c%s "$webp_output" 2>/dev/null || stat -f%z "$webp_output" 2>/dev/null)
@@ -285,10 +296,11 @@ process_single_aggressive() {
         if [ "$original_size" -gt 0 ]; then
             savings_pct=$((savings * 100 / original_size))
         fi
-        echo "ok $original_size $new_size ${rel_path%.*}.webp" > "$result_file"
-        echo -e "  ${GREEN}OK${NC} $rel_path → ${rel_path%.*}.webp ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+        local level="webp${final_quality}"
+        echo "ok $original_size $new_size $level ${rel_path%.*}.webp" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path → ${rel_path%.*}.webp [$level] ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
     else
-        echo "fail $original_size 0 $rel_path" > "$result_file"
+        echo "fail $original_size 0 none $rel_path" > "$result_file"
         echo -e "  ${RED}FAILED${NC} $rel_path"
     fi
 }
@@ -301,6 +313,18 @@ process_single_image() {
     local original_size
     original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
 
+    # Determine compression level label from file extension
+    local ext_lower
+    ext_lower=$(echo "${image##*.}" | tr '[:upper:]' '[:lower:]')
+    local level
+    case "$ext_lower" in
+        jpg|jpeg) level="jpeg${JPEG_QUALITY}" ;;
+        png)      level="png-lossless" ;;
+        gif)      level="gif-o3" ;;
+        webp)     level="webp${WEBP_QUALITY}" ;;
+        *)        level="unknown" ;;
+    esac
+
     if process_image "$image" "$output_path"; then
         local new_size
         new_size=$(stat -c%s "$output_path" 2>/dev/null || stat -f%z "$output_path" 2>/dev/null)
@@ -309,10 +333,10 @@ process_single_image() {
         if [ "$original_size" -gt 0 ]; then
             savings_pct=$((savings * 100 / original_size))
         fi
-        echo "ok $original_size $new_size $rel_path" > "$result_file"
-        echo -e "  ${GREEN}OK${NC} $rel_path ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+        echo "ok $original_size $new_size $level $rel_path" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path [$level] ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
     else
-        echo "fail $original_size 0 $rel_path" > "$result_file"
+        echo "fail $original_size 0 none $rel_path" > "$result_file"
         echo -e "  ${RED}FAILED${NC} $rel_path"
     fi
 }
@@ -355,7 +379,7 @@ RECURSIVE=false
 GENERATE_WEBP=false
 FORCE=false
 AGGRESSIVE=false
-AGGRESSIVE_OUTPUT="./aggressive"
+OUTPUT_DIR_SET=false
 JOBS=3
 
 while [ $# -gt 0 ]; do
@@ -369,10 +393,6 @@ while [ $# -gt 0 ]; do
             shift
             AGGRESSIVE_QUALITY="${1:?'--aggressive-quality requires a number'}"
             ;;
-        --aggressive-output)
-            shift
-            AGGRESSIVE_OUTPUT="${1:?'--aggressive-output requires a directory argument'}"
-            ;;
         --size-threshold|-s)
             shift
             SIZE_THRESHOLD_BYTES=$(parse_size "${1:?'--size-threshold requires a size value'}")
@@ -384,6 +404,7 @@ while [ $# -gt 0 ]; do
         --output|-o)
             shift
             OUTPUT_DIR="${1:?'--output requires a directory argument'}"
+            OUTPUT_DIR_SET=true
             ;;
         --help|-h)      print_usage; exit 0 ;;
         -*)             log_error "Unknown option: $1"; print_usage; exit 1 ;;
@@ -400,6 +421,11 @@ if [ "$MAX_JOBS" -lt 1 ]; then
 fi
 if [ "$JOBS" -gt "$MAX_JOBS" ]; then
     JOBS=$MAX_JOBS
+fi
+
+# Default output dir for aggressive mode
+if [ "$AGGRESSIVE" = true ] && [ "$OUTPUT_DIR_SET" = false ]; then
+    OUTPUT_DIR="./aggressive"
 fi
 
 # Validate inputs
@@ -484,104 +510,192 @@ echo ""
 RESULTS_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
-# Pre-check optimization markers in bulk (single exiftool invocation)
-declare -A OPTIMIZED_MAP
-if [ "$FORCE" = false ]; then
-    while IFS='|' read -r file comment; do
-        if [ "$comment" = "philoassets-optimized" ]; then
-            OPTIMIZED_MAP["$file"]=1
+# Pre-read optimization markers in bulk (single exiftool invocation)
+declare -A COMMENT_MAP
+while IFS='|' read -r file comment; do
+    [ -n "$file" ] && COMMENT_MAP["$file"]="$comment"
+done < <(exiftool -p '$Directory/$FileName|$Comment' "${IMAGES[@]}" 2>/dev/null)
+
+if [ "$AGGRESSIVE" = true ]; then
+    # =========================================================================
+    # AGGRESSIVE MODE: convert large optimized files to WebP
+    # =========================================================================
+
+    # Phase 1: Filter to files that are stamped optimized + above threshold
+    TO_PROCESS=()
+    for image in "${IMAGES[@]}"; do
+        rel_path=""
+        for _dir in "${INPUT_DIRS[@]}"; do
+            if [[ "$image" == "$_dir/"* ]]; then
+                rel_path="${image#$_dir/}"
+                break
+            fi
+        done
+        if [ -z "$rel_path" ]; then
+            rel_path="$(basename "$image")"
         fi
-    done < <(exiftool -p '$Directory/$FileName|$Comment' "${IMAGES[@]}" 2>/dev/null)
-fi
+        output_path="$OUTPUT_DIR/$rel_path"
 
-# Pre-read dimensions in bulk (single identify invocation)
-declare -A DIMENSIONS_MAP
-while IFS='|' read -r file dims; do
-    DIMENSIONS_MAP["$file"]="$dims"
-done < <(identify -format '%d/%f|%wx%h\n' "${IMAGES[@]}" 2>/dev/null | sort -u -t'|' -k1,1)
+        comment="${COMMENT_MAP[$image]:-}"
 
-# Phase 1: Filter images (sequential)
-TO_PROCESS=()
-for image in "${IMAGES[@]}"; do
-    # Get relative path: try stripping each input dir prefix, fall back to basename
-    rel_path=""
-    for _dir in "${INPUT_DIRS[@]}"; do
-        if [[ "$image" == "$_dir/"* ]]; then
-            rel_path="${image#$_dir/}"
-            break
+        # Must be stamped as optimized (from first pass)
+        if [ "$comment" != "philoassets-optimized" ] && [ "$comment" != "philoassets-aggressive" ]; then
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            continue
         fi
-    done
-    if [ -z "$rel_path" ]; then
-        rel_path="$(basename "$image")"
-    fi
-    output_path="$OUTPUT_DIR/$rel_path"
 
-    # Check if already processed (output exists)
-    if [ -f "$output_path" ] && [ "$DRY_RUN" = false ] && [ "$FORCE" = false ]; then
-        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-        continue
-    fi
+        # Skip if already aggressively compressed (unless --force)
+        if [ "$FORCE" = false ] && [ "$comment" = "philoassets-aggressive" ]; then
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            continue
+        fi
 
-    # Check if already optimized (metadata marker from bulk pre-read)
-    if [ "$FORCE" = false ] && [ "${OPTIMIZED_MAP[$image]+_}" ]; then
-        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-        continue
-    fi
+        # Must be above size threshold
+        file_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
+        if [ "$file_size" -le "$SIZE_THRESHOLD_BYTES" ]; then
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            continue
+        fi
 
-    # Check if needs optimization (dimensions from bulk pre-read)
-    dimensions="${DIMENSIONS_MAP[$image]}"
-    if needs_optimization "$image" "$dimensions"; then
         if [ "$DRY_RUN" = true ]; then
-            original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
-            echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $original_size), ${dimensions})"
+            echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $file_size))"
             PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         else
             TO_PROCESS+=("$image" "$output_path" "$rel_path")
         fi
-    else
-        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-    fi
-done
+    done
 
-# Pre-create output directories
-declare -A SEEN_DIRS
-for ((i=1; i<${#TO_PROCESS[@]}; i+=3)); do
-    dir=$(dirname "${TO_PROCESS[$i]}")
-    if [ -z "${SEEN_DIRS[$dir]+_}" ]; then
-        SEEN_DIRS["$dir"]=1
-        mkdir -p "$dir"
-    fi
-done
-
-# Phase 2: Process images (parallel)
-if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
-    active_jobs=0
-    job_index=0
-    for ((i=0; i<${#TO_PROCESS[@]}; i+=3)); do
-        image="${TO_PROCESS[$i]}"
-        output_path="${TO_PROCESS[$i+1]}"
-        rel_path="${TO_PROCESS[$i+2]}"
-
-        (
-            renice -n 19 $BASHPID >/dev/null 2>&1 || true
-            process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path"
-        ) &
-        active_jobs=$((active_jobs + 1))
-        job_index=$((job_index + 1))
-
-        if [ "$active_jobs" -ge "$JOBS" ]; then
-            wait -n || true
-            active_jobs=$((active_jobs - 1))
+    # Pre-create output directories
+    declare -A SEEN_DIRS
+    for ((i=1; i<${#TO_PROCESS[@]}; i+=3)); do
+        dir=$(dirname "${TO_PROCESS[$i]}")
+        if [ -z "${SEEN_DIRS[$dir]+_}" ]; then
+            SEEN_DIRS["$dir"]=1
+            mkdir -p "$dir"
         fi
     done
-    wait || true
+
+    # Phase 2: Parallel aggressive processing
+    if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
+        active_jobs=0
+        job_index=0
+        for ((i=0; i<${#TO_PROCESS[@]}; i+=3)); do
+            image="${TO_PROCESS[$i]}"
+            output_path="${TO_PROCESS[$i+1]}"
+            rel_path="${TO_PROCESS[$i+2]}"
+
+            (
+                renice -n 19 $BASHPID >/dev/null 2>&1 || true
+                process_single_aggressive "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path"
+            ) &
+            active_jobs=$((active_jobs + 1))
+            job_index=$((job_index + 1))
+
+            if [ "$active_jobs" -ge "$JOBS" ]; then
+                wait -n || true
+                active_jobs=$((active_jobs - 1))
+            fi
+        done
+        wait || true
+    fi
+
+else
+    # =========================================================================
+    # NORMAL MODE: standard optimization
+    # =========================================================================
+
+    # Pre-read dimensions in bulk (single identify invocation)
+    declare -A DIMENSIONS_MAP
+    while IFS='|' read -r file dims; do
+        DIMENSIONS_MAP["$file"]="$dims"
+    done < <(identify -format '%d/%f|%wx%h\n' "${IMAGES[@]}" 2>/dev/null | sort -u -t'|' -k1,1)
+
+    # Phase 1: Filter images (sequential)
+    TO_PROCESS=()
+    for image in "${IMAGES[@]}"; do
+        rel_path=""
+        for _dir in "${INPUT_DIRS[@]}"; do
+            if [[ "$image" == "$_dir/"* ]]; then
+                rel_path="${image#$_dir/}"
+                break
+            fi
+        done
+        if [ -z "$rel_path" ]; then
+            rel_path="$(basename "$image")"
+        fi
+        output_path="$OUTPUT_DIR/$rel_path"
+
+        # Check if already processed (output exists)
+        if [ -f "$output_path" ] && [ "$DRY_RUN" = false ] && [ "$FORCE" = false ]; then
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            continue
+        fi
+
+        # Check if already optimized or aggressively compressed (skip both)
+        if [ "$FORCE" = false ]; then
+            comment="${COMMENT_MAP[$image]:-}"
+            if [ "$comment" = "philoassets-optimized" ] || [ "$comment" = "philoassets-aggressive" ]; then
+                SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+                continue
+            fi
+        fi
+
+        # Check if needs optimization (dimensions from bulk pre-read)
+        dimensions="${DIMENSIONS_MAP[$image]}"
+        if needs_optimization "$image" "$dimensions"; then
+            if [ "$DRY_RUN" = true ]; then
+                original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
+                echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $original_size), ${dimensions})"
+                PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+            else
+                TO_PROCESS+=("$image" "$output_path" "$rel_path")
+            fi
+        else
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        fi
+    done
+
+    # Pre-create output directories
+    declare -A SEEN_DIRS
+    for ((i=1; i<${#TO_PROCESS[@]}; i+=3)); do
+        dir=$(dirname "${TO_PROCESS[$i]}")
+        if [ -z "${SEEN_DIRS[$dir]+_}" ]; then
+            SEEN_DIRS["$dir"]=1
+            mkdir -p "$dir"
+        fi
+    done
+
+    # Phase 2: Process images (parallel)
+    if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
+        active_jobs=0
+        job_index=0
+        for ((i=0; i<${#TO_PROCESS[@]}; i+=3)); do
+            image="${TO_PROCESS[$i]}"
+            output_path="${TO_PROCESS[$i+1]}"
+            rel_path="${TO_PROCESS[$i+2]}"
+
+            (
+                renice -n 19 $BASHPID >/dev/null 2>&1 || true
+                process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path"
+            ) &
+            active_jobs=$((active_jobs + 1))
+            job_index=$((job_index + 1))
+
+            if [ "$active_jobs" -ge "$JOBS" ]; then
+                wait -n || true
+                active_jobs=$((active_jobs - 1))
+            fi
+        done
+        wait || true
+    fi
+
 fi
 
-# Phase 3: Aggregate results
+# Phase 3: Aggregate results (shared by both modes)
 CSV_ROWS=()
 for result_file in "$RESULTS_DIR"/*.result; do
     [ -f "$result_file" ] || continue
-    read -r status orig_size new_size file_name < "$result_file"
+    read -r status orig_size new_size compression_level file_name < "$result_file"
     if [ "$status" = "ok" ]; then
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + orig_size))
@@ -590,107 +704,11 @@ for result_file in "$RESULTS_DIR"/*.result; do
         if [ "$orig_size" -gt 0 ]; then
             local_pct=$(( (orig_size - new_size) * 100 / orig_size ))
         fi
-        CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct")
+        CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct,$compression_level")
     else
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 done
-
-# Phase 4: Aggressive pass (convert large files to WebP)
-AGG_PROCESSED=0
-AGG_ORIGINAL_SIZE=0
-AGG_COMPRESSED_SIZE=0
-
-if [ "$AGGRESSIVE" = true ] && [ "$DRY_RUN" = false ] && [ "$PROCESSED_COUNT" -gt 0 ]; then
-    echo ""
-    log_info "Aggressive pass: converting large files to WebP..."
-    echo ""
-
-    # Convert aggressive output to absolute path
-    case "$AGGRESSIVE_OUTPUT" in
-        /*) ;;
-        *)  AGGRESSIVE_OUTPUT="$(pwd)/$AGGRESSIVE_OUTPUT" ;;
-    esac
-    mkdir -p "$AGGRESSIVE_OUTPUT"
-
-    # Scan optimized output for files still above threshold
-    AGG_CANDIDATES=()
-    while IFS= read -r f; do
-        local_size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
-        if [ "$local_size" -gt "$SIZE_THRESHOLD_BYTES" ]; then
-            # Skip if already aggressively compressed (check metadata)
-            if [ "$FORCE" = false ]; then
-                comment=$(exiftool -s3 -Comment "$f" 2>/dev/null)
-                if [ "$comment" = "philoassets-aggressive" ]; then
-                    continue
-                fi
-            fi
-            AGG_CANDIDATES+=("$f")
-        fi
-    done < <(find "$OUTPUT_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null)
-
-    if [ ${#AGG_CANDIDATES[@]} -gt 0 ]; then
-        log_info "Found ${#AGG_CANDIDATES[@]} files above $(format_size $SIZE_THRESHOLD_BYTES) for aggressive compression"
-        echo ""
-
-        # Build processing list with output paths
-        AGG_TO_PROCESS=()
-        declare -A AGG_SEEN_DIRS
-        for candidate in "${AGG_CANDIDATES[@]}"; do
-            rel="${candidate#$OUTPUT_DIR/}"
-            agg_output="$AGGRESSIVE_OUTPUT/$rel"
-            agg_dir=$(dirname "$agg_output")
-            if [ -z "${AGG_SEEN_DIRS[$agg_dir]+_}" ]; then
-                AGG_SEEN_DIRS["$agg_dir"]=1
-                mkdir -p "$agg_dir"
-            fi
-            AGG_TO_PROCESS+=("$candidate" "$agg_output" "$rel")
-        done
-
-        # Parallel aggressive processing
-        AGG_RESULTS_DIR=$(mktemp -d)
-        agg_active=0
-        agg_idx=0
-        for ((i=0; i<${#AGG_TO_PROCESS[@]}; i+=3)); do
-            agg_image="${AGG_TO_PROCESS[$i]}"
-            agg_out="${AGG_TO_PROCESS[$i+1]}"
-            agg_rel="${AGG_TO_PROCESS[$i+2]}"
-
-            (
-                renice -n 19 $BASHPID >/dev/null 2>&1 || true
-                process_single_aggressive "$agg_image" "$agg_out" "$AGG_RESULTS_DIR/$agg_idx.result" "$agg_rel"
-            ) &
-            agg_active=$((agg_active + 1))
-            agg_idx=$((agg_idx + 1))
-
-            if [ "$agg_active" -ge "$JOBS" ]; then
-                wait -n || true
-                agg_active=$((agg_active - 1))
-            fi
-        done
-        wait || true
-
-        # Aggregate aggressive results
-        AGG_CSV_ROWS=()
-        for result_file in "$AGG_RESULTS_DIR"/*.result; do
-            [ -f "$result_file" ] || continue
-            read -r status orig_size new_size file_name < "$result_file"
-            if [ "$status" = "ok" ]; then
-                AGG_PROCESSED=$((AGG_PROCESSED + 1))
-                AGG_ORIGINAL_SIZE=$((AGG_ORIGINAL_SIZE + orig_size))
-                AGG_COMPRESSED_SIZE=$((AGG_COMPRESSED_SIZE + new_size))
-                local_pct=0
-                if [ "$orig_size" -gt 0 ]; then
-                    local_pct=$(( (orig_size - new_size) * 100 / orig_size ))
-                fi
-                AGG_CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct")
-            fi
-        done
-        rm -rf "$AGG_RESULTS_DIR"
-    else
-        log_info "No files above $(format_size $SIZE_THRESHOLD_BYTES) after optimization — aggressive pass skipped"
-    fi
-fi
 
 # Summary
 echo ""
@@ -704,7 +722,11 @@ if [ "$DRY_RUN" = true ]; then
     log_info "Images to process: $PROCESSED_COUNT"
     log_info "Images to skip: $SKIPPED_COUNT"
 else
-    log_success "Optimization complete!"
+    if [ "$AGGRESSIVE" = true ]; then
+        log_success "Aggressive compression complete!"
+    else
+        log_success "Optimization complete!"
+    fi
     log_info "Images processed: $PROCESSED_COUNT"
     log_info "Images skipped: $SKIPPED_COUNT"
     if [ "$FAILED_COUNT" -gt 0 ]; then
@@ -727,6 +749,7 @@ else
             echo "Image Optimization Report"
             echo "========================="
             echo "Date: $(date)"
+            echo "Mode: $([ "$AGGRESSIVE" = true ] && echo 'aggressive' || echo 'normal')"
             echo "Input: ${INPUTS[*]}"
             echo "Output: $OUTPUT_DIR"
             echo ""
@@ -744,36 +767,12 @@ else
         # Write CSV report
         CSV_FILE="$OUTPUT_DIR/optimization-report.csv"
         {
-            echo "file_name,original_size,optimized_size,percent_saved"
+            echo "file_name,original_size,optimized_size,percent_saved,compression_level"
             for row in "${CSV_ROWS[@]}"; do
                 echo "$row"
             done
         } > "$CSV_FILE"
         log_info "CSV report saved to: $CSV_FILE"
-    fi
-
-    if [ "$AGGRESSIVE" = true ] && [ "$AGG_PROCESSED" -gt 0 ]; then
-        echo ""
-        log_info "--- Aggressive pass ---"
-        log_info "Files re-compressed: $AGG_PROCESSED"
-        agg_savings=$((AGG_ORIGINAL_SIZE - AGG_COMPRESSED_SIZE))
-        if [ "$AGG_ORIGINAL_SIZE" -gt 0 ]; then
-            agg_savings_pct=$((agg_savings * 100 / AGG_ORIGINAL_SIZE))
-            log_info "Aggressive input size:  $(format_size $AGG_ORIGINAL_SIZE)"
-            log_info "Aggressive output size: $(format_size $AGG_COMPRESSED_SIZE)"
-            log_success "Aggressive savings: $(format_size $agg_savings) (-${agg_savings_pct}%)"
-        fi
-        log_info "Aggressive output: $AGGRESSIVE_OUTPUT"
-
-        # Write aggressive CSV report
-        AGG_CSV_FILE="$AGGRESSIVE_OUTPUT/aggressive-report.csv"
-        {
-            echo "file_name,original_size,optimized_size,percent_saved"
-            for row in "${AGG_CSV_ROWS[@]}"; do
-                echo "$row"
-            done
-        } > "$AGG_CSV_FILE"
-        log_info "Aggressive CSV report saved to: $AGG_CSV_FILE"
     fi
 fi
 
