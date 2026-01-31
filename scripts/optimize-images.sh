@@ -8,10 +8,10 @@ set -e
 # WebP versions. Outputs to a separate folder (non-destructive).
 #
 # Usage:
-#   ./optimize-images.sh <input-folder> [output-folder] [--dry-run]
+#   ./optimize-images.sh <input...> [options]
 #
 # Dependencies:
-#   sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp bc
+#   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp bc
 # =============================================================================
 
 # Colors for output
@@ -24,9 +24,8 @@ NC='\033[0m' # No Color
 # Configuration
 SIZE_THRESHOLD_BYTES=1048576  # 1MB in bytes
 MAX_DIMENSION=1920
-JPEG_QUALITY=85
-WEBP_QUALITY=85
-PNG_QUALITY="65-80"
+JPEG_QUALITY=92
+WEBP_QUALITY=90
 
 # Counters for summary
 TOTAL_ORIGINAL_SIZE=0
@@ -40,16 +39,24 @@ FAILED_COUNT=0
 # -----------------------------------------------------------------------------
 
 print_usage() {
-    echo "Usage: $0 <input-folder> [output-folder] [--dry-run]"
+    echo "Usage: $0 <input...> [options]"
     echo ""
     echo "Arguments:"
-    echo "  input-folder   Source folder containing images to optimize"
-    echo "  output-folder  Destination folder (default: ./optimized)"
-    echo "  --dry-run      Preview what would be processed without making changes"
+    echo "  input...                One or more files or directories to optimize"
     echo ""
-    echo "Example:"
-    echo "  $0 ./uploads ./optimized"
+    echo "Options:"
+    echo "  -o, --output <dir>      Destination folder (default: ./optimized)"
+    echo "  -d, --dry-run           Preview what would be processed without making changes"
+    echo "  -r, --recursive         Traverse subdirectories (default: top-level only)"
+    echo "  -w, --webp              Generate WebP versions of optimized images"
+    echo "  -h, --help              Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0 ./uploads"
     echo "  $0 ./uploads --dry-run"
+    echo "  $0 ./uploads -r -w                    # recursive + webp generation"
+    echo "  $0 image1.png image2.jpg -o ./out      # optimize specific files"
+    echo "  $0 ./uploads ./photos -r -o ./out      # multiple directories"
 }
 
 log_info() {
@@ -86,7 +93,6 @@ check_dependencies() {
     command -v identify >/dev/null 2>&1 || missing+=("imagemagick")
     command -v jpegoptim >/dev/null 2>&1 || missing+=("jpegoptim")
     command -v optipng >/dev/null 2>&1 || missing+=("optipng")
-    command -v pngquant >/dev/null 2>&1 || missing+=("pngquant")
     command -v gifsicle >/dev/null 2>&1 || missing+=("gifsicle")
     command -v cwebp >/dev/null 2>&1 || missing+=("webp")
     command -v bc >/dev/null 2>&1 || missing+=("bc")
@@ -95,7 +101,7 @@ check_dependencies() {
         log_error "Missing dependencies: ${missing[*]}"
         echo ""
         echo "Install with:"
-        echo "  sudo apt-get install imagemagick jpegoptim optipng pngquant gifsicle webp bc"
+        echo "  sudo apt-get install imagemagick jpegoptim optipng gifsicle webp bc"
         exit 1
     fi
 }
@@ -134,8 +140,9 @@ optimize_jpeg() {
 
     mkdir -p "$output_dir"
 
-    # Resize if needed and compress
+    # Resize if needed and compress (convert to sRGB before stripping profiles)
     convert "$input" \
+        -colorspace sRGB \
         -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" \
         -quality "$JPEG_QUALITY" \
         -strip \
@@ -145,7 +152,9 @@ optimize_jpeg() {
     jpegoptim --quiet --strip-all "$output"
 
     # Generate WebP version
-    cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+    if [ "$GENERATE_WEBP" = true ]; then
+        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+    fi
 }
 
 optimize_png() {
@@ -155,27 +164,20 @@ optimize_png() {
 
     mkdir -p "$output_dir"
 
-    # Resize if needed
+    # Resize if needed (convert to sRGB before stripping profiles to preserve colors)
     convert "$input" \
+        -colorspace sRGB \
         -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" \
         -strip \
         "$output"
 
-    # Lossy compression with pngquant (use temp file to avoid corruption on failure)
-    local tmp_png
-    tmp_png=$(mktemp "${output_dir}/.pngquant-XXXXXX.png")
-    if pngquant --force --quality="$PNG_QUALITY" --output "$tmp_png" "$output" 2>/dev/null; then
-        mv "$tmp_png" "$output"
-    else
-        rm -f "$tmp_png"
-        log_warn "pngquant failed for $(basename "$output"), falling back to lossless only"
-    fi
-
-    # Lossless optimization
+    # Lossless optimization only (no lossy quantization to preserve colors)
     optipng -quiet -o2 "$output"
 
     # Generate WebP version
-    cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+    if [ "$GENERATE_WEBP" = true ]; then
+        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+    fi
 }
 
 optimize_gif() {
@@ -189,11 +191,13 @@ optimize_gif() {
     gifsicle --optimize=3 "$input" -o "$output"
 
     # Generate static WebP from first frame
-    local tmp_frame
-    tmp_frame=$(mktemp "${output_dir}/.gifframe-XXXXXX.png")
-    convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "$tmp_frame"
-    cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
-    rm -f "$tmp_frame"
+    if [ "$GENERATE_WEBP" = true ]; then
+        local tmp_frame
+        tmp_frame=$(mktemp "${output_dir}/.gifframe-XXXXXX.png")
+        convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "$tmp_frame"
+        cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
+        rm -f "$tmp_frame"
+    fi
 }
 
 optimize_webp() {
@@ -239,46 +243,46 @@ process_image() {
 # -----------------------------------------------------------------------------
 
 # Parse arguments
-INPUT_DIR=""
+INPUTS=()
 OUTPUT_DIR="./optimized"
 DRY_RUN=false
+RECURSIVE=false
+GENERATE_WEBP=false
 
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run)
-            DRY_RUN=true
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run|-d)   DRY_RUN=true ;;
+        --recursive|-r) RECURSIVE=true ;;
+        --webp|-w)      GENERATE_WEBP=true ;;
+        --output|-o)
+            shift
+            OUTPUT_DIR="${1:?'--output requires a directory argument'}"
             ;;
-        --help|-h)
-            print_usage
-            exit 0
-            ;;
-        *)
-            if [ -z "$INPUT_DIR" ]; then
-                INPUT_DIR="$arg"
-            else
-                OUTPUT_DIR="$arg"
-            fi
-            ;;
+        --help|-h)      print_usage; exit 0 ;;
+        -*)             log_error "Unknown option: $1"; print_usage; exit 1 ;;
+        *)              INPUTS+=("$1") ;;
     esac
+    shift
 done
 
-# Validate input
-if [ -z "$INPUT_DIR" ]; then
-    log_error "Input folder is required"
+# Validate inputs
+if [ ${#INPUTS[@]} -eq 0 ]; then
+    log_error "At least one input file or directory is required"
     print_usage
     exit 1
 fi
 
-if [ ! -d "$INPUT_DIR" ]; then
-    log_error "Input folder does not exist: $INPUT_DIR"
-    exit 1
-fi
+for input in "${INPUTS[@]}"; do
+    if [ ! -f "$input" ] && [ ! -d "$input" ]; then
+        log_error "Input does not exist: $input"
+        exit 1
+    fi
+done
 
 # Check dependencies
 check_dependencies
 
-# Convert to absolute paths
-INPUT_DIR=$(cd "$INPUT_DIR" && pwd)
+# Convert output to absolute path
 case "$OUTPUT_DIR" in
     /*) ;;  # already absolute
     *)  OUTPUT_DIR="$(pwd)/$OUTPUT_DIR" ;;
@@ -292,18 +296,44 @@ echo "=============================================="
 echo "  Image Optimization Script"
 echo "=============================================="
 echo ""
-log_info "Input folder:  $INPUT_DIR"
+log_info "Inputs: ${INPUTS[*]}"
 log_info "Output folder: $OUTPUT_DIR"
 log_info "Size threshold: $(format_size $SIZE_THRESHOLD_BYTES)"
 log_info "Max dimension: ${MAX_DIMENSION}px"
 log_info "Dry run: $DRY_RUN"
+log_info "Recursive: $RECURSIVE"
+log_info "WebP generation: $GENERATE_WEBP"
 echo ""
 
-# Find all images
-mapfile -t IMAGES < <(find "$INPUT_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null)
+# Collect all images from inputs
+IMAGES=()
+INPUT_DIRS=()
+for input in "${INPUTS[@]}"; do
+    if [ -f "$input" ]; then
+        case "${input,,}" in
+            *.jpg|*.jpeg|*.png|*.gif|*.webp)
+                IMAGES+=("$(realpath "$input")")
+                ;;
+            *)
+                log_warn "Skipping unsupported file: $input"
+                ;;
+        esac
+    elif [ -d "$input" ]; then
+        abs_dir=$(cd "$input" && pwd)
+        INPUT_DIRS+=("$abs_dir")
+        FIND_ARGS=("$abs_dir")
+        if [ "$RECURSIVE" = false ]; then
+            FIND_ARGS+=(-maxdepth 1)
+        fi
+        FIND_ARGS+=(-type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \))
+        while IFS= read -r f; do
+            IMAGES+=("$f")
+        done < <(find "${FIND_ARGS[@]}" 2>/dev/null)
+    fi
+done
 
 if [ ${#IMAGES[@]} -eq 0 ]; then
-    log_warn "No images found in $INPUT_DIR"
+    log_warn "No images found in: ${INPUTS[*]}"
     exit 0
 fi
 
@@ -312,8 +342,17 @@ echo ""
 
 # Process images
 for image in "${IMAGES[@]}"; do
-    # Get relative path
-    rel_path="${image#$INPUT_DIR/}"
+    # Get relative path: try stripping each input dir prefix, fall back to basename
+    rel_path=""
+    for _dir in "${INPUT_DIRS[@]}"; do
+        if [[ "$image" == "$_dir/"* ]]; then
+            rel_path="${image#$_dir/}"
+            break
+        fi
+    done
+    if [ -z "$rel_path" ]; then
+        rel_path="$(basename "$image")"
+    fi
     output_path="$OUTPUT_DIR/$rel_path"
 
     # Check if already processed
@@ -392,7 +431,7 @@ else
             echo "Image Optimization Report"
             echo "========================="
             echo "Date: $(date)"
-            echo "Input: $INPUT_DIR"
+            echo "Input: ${INPUTS[*]}"
             echo "Output: $OUTPUT_DIR"
             echo ""
             echo "Images processed: $PROCESSED_COUNT"
