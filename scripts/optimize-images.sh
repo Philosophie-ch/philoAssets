@@ -50,6 +50,7 @@ print_usage() {
     echo "  -r, --recursive         Traverse subdirectories (default: top-level only)"
     echo "  -w, --webp              Generate WebP versions of optimized images"
     echo "  -f, --force             Re-optimize even if already marked as optimized"
+    echo "  -j, --jobs <N>          Max parallel jobs (default: 3)"
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
@@ -234,6 +235,30 @@ optimize_webp() {
     stamp_optimized "$output"
 }
 
+process_single_image() {
+    local image="$1"
+    local output_path="$2"
+    local result_file="$3"
+    local rel_path="$4"
+    local original_size
+    original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
+
+    if process_image "$image" "$output_path"; then
+        local new_size
+        new_size=$(stat -c%s "$output_path" 2>/dev/null || stat -f%z "$output_path" 2>/dev/null)
+        local savings=$((original_size - new_size))
+        local savings_pct=0
+        if [ "$original_size" -gt 0 ]; then
+            savings_pct=$((savings * 100 / original_size))
+        fi
+        echo "ok $original_size $new_size" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+    else
+        echo "fail $original_size 0" > "$result_file"
+        echo -e "  ${RED}FAILED${NC} $rel_path"
+    fi
+}
+
 process_image() {
     local input="$1"
     local output="$2"
@@ -271,6 +296,7 @@ DRY_RUN=false
 RECURSIVE=false
 GENERATE_WEBP=false
 FORCE=false
+JOBS=3
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -278,6 +304,10 @@ while [ $# -gt 0 ]; do
         --recursive|-r) RECURSIVE=true ;;
         --webp|-w)      GENERATE_WEBP=true ;;
         --force|-f)     FORCE=true ;;
+        --jobs|-j)
+            shift
+            JOBS="${1:?'--jobs requires a number'}"
+            ;;
         --output|-o)
             shift
             OUTPUT_DIR="${1:?'--output requires a directory argument'}"
@@ -288,6 +318,15 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# Clamp JOBS to available CPU cores (leave one core free)
+MAX_JOBS=$(( $(nproc 2>/dev/null || echo 2) - 1 ))
+if [ "$MAX_JOBS" -lt 1 ]; then
+    MAX_JOBS=1
+fi
+if [ "$JOBS" -gt "$MAX_JOBS" ]; then
+    JOBS=$MAX_JOBS
+fi
 
 # Validate inputs
 if [ ${#INPUTS[@]} -eq 0 ]; then
@@ -328,6 +367,7 @@ log_info "Dry run: $DRY_RUN"
 log_info "Recursive: $RECURSIVE"
 log_info "WebP generation: $GENERATE_WEBP"
 log_info "Force: $FORCE"
+log_info "Parallel jobs: $JOBS"
 echo ""
 
 # Collect all images from inputs
@@ -365,7 +405,12 @@ fi
 log_info "Found ${#IMAGES[@]} images, scanning for optimization candidates..."
 echo ""
 
-# Process images
+# Temp directory for parallel job results
+RESULTS_DIR=$(mktemp -d)
+trap 'rm -rf "$RESULTS_DIR"' EXIT
+
+# Phase 1: Filter images (sequential)
+TO_PROCESS=()
 for image in "${IMAGES[@]}"; do
     # Get relative path: try stripping each input dir prefix, fall back to basename
     rel_path=""
@@ -394,36 +439,50 @@ for image in "${IMAGES[@]}"; do
 
     # Check if needs optimization
     if needs_optimization "$image"; then
-        original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
-
         if [ "$DRY_RUN" = true ]; then
+            original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
             dimensions=$(identify -format "%wx%h" "$image" 2>/dev/null | head -1)
             echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $original_size), ${dimensions})"
             PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         else
-            echo -ne "  Processing: $rel_path ... "
-
-            if process_image "$image" "$output_path"; then
-                new_size=$(stat -c%s "$output_path" 2>/dev/null || stat -f%z "$output_path" 2>/dev/null)
-                savings=$((original_size - new_size))
-                if [ "$original_size" -gt 0 ]; then
-                    savings_pct=$((savings * 100 / original_size))
-                else
-                    savings_pct=0
-                fi
-
-                TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + original_size))
-                TOTAL_OPTIMIZED_SIZE=$((TOTAL_OPTIMIZED_SIZE + new_size))
-                PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-
-                echo -e "${GREEN}OK${NC} ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
-            else
-                FAILED_COUNT=$((FAILED_COUNT + 1))
-                echo -e "${RED}FAILED${NC}"
-            fi
+            TO_PROCESS+=("$image" "$output_path" "$rel_path")
         fi
     else
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+    fi
+done
+
+# Phase 2: Process images (parallel)
+if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
+    active_jobs=0
+    job_index=0
+    for ((i=0; i<${#TO_PROCESS[@]}; i+=3)); do
+        image="${TO_PROCESS[$i]}"
+        output_path="${TO_PROCESS[$i+1]}"
+        rel_path="${TO_PROCESS[$i+2]}"
+
+        process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path" &
+        active_jobs=$((active_jobs + 1))
+        job_index=$((job_index + 1))
+
+        if [ "$active_jobs" -ge "$JOBS" ]; then
+            wait -n || true
+            active_jobs=$((active_jobs - 1))
+        fi
+    done
+    wait || true
+fi
+
+# Phase 3: Aggregate results
+for result_file in "$RESULTS_DIR"/*.result; do
+    [ -f "$result_file" ] || continue
+    read -r status orig_size new_size < "$result_file"
+    if [ "$status" = "ok" ]; then
+        PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+        TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + orig_size))
+        TOTAL_OPTIMIZED_SIZE=$((TOTAL_OPTIMIZED_SIZE + new_size))
+    else
+        FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 done
 
