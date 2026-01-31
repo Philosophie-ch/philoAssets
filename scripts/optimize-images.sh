@@ -493,7 +493,10 @@ if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
         output_path="${TO_PROCESS[$i+1]}"
         rel_path="${TO_PROCESS[$i+2]}"
 
-        nice -n 19 process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path" &
+        (
+            renice -n 19 $BASHPID >/dev/null 2>&1 || true
+            process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path"
+        ) &
         active_jobs=$((active_jobs + 1))
         job_index=$((job_index + 1))
 
