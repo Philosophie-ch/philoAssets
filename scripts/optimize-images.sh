@@ -106,7 +106,6 @@ check_dependencies() {
     local missing=()
 
     command -v convert >/dev/null 2>&1 || missing+=("imagemagick")
-    command -v identify >/dev/null 2>&1 || missing+=("imagemagick")
     command -v jpegoptim >/dev/null 2>&1 || missing+=("jpegoptim")
     command -v optipng >/dev/null 2>&1 || missing+=("optipng")
     command -v gifsicle >/dev/null 2>&1 || missing+=("gifsicle")
@@ -178,7 +177,7 @@ optimize_jpeg() {
 
     # Generate WebP version
     if [ "$GENERATE_WEBP" = true ]; then
-        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output%.*}.webp"
     fi
 
     stamp_optimized "$output"
@@ -200,7 +199,7 @@ optimize_png() {
 
     # Generate WebP version
     if [ "$GENERATE_WEBP" = true ]; then
-        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
+        cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output%.*}.webp"
     fi
 
     stamp_optimized "$output"
@@ -219,7 +218,7 @@ optimize_gif() {
         local tmp_frame
         tmp_frame=$(mktemp "${output_dir}/.gifframe-XXXXXX.png")
         convert "${input}[0]" -resize "${MAX_DIMENSION}x${MAX_DIMENSION}>" "$tmp_frame"
-        cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
+        cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output%.*}.webp"
         rm -f "$tmp_frame"
     fi
 
