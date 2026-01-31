@@ -297,10 +297,12 @@ process_single_aggressive() {
             savings_pct=$((savings * 100 / original_size))
         fi
         local level="webp${final_quality}"
-        echo "ok $original_size $new_size $level ${rel_path%.*}.webp" > "$result_file"
-        echo -e "  ${GREEN}OK${NC} $rel_path → ${rel_path%.*}.webp [$level] ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+        local orig_hr=$(format_size $original_size)
+        local new_hr=$(format_size $new_size)
+        echo "ok $original_size $new_size $orig_hr $new_hr $level ${rel_path%.*}.webp" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path → ${rel_path%.*}.webp [$level] ($orig_hr → $new_hr, -${savings_pct}%)"
     else
-        echo "fail $original_size 0 none $rel_path" > "$result_file"
+        echo "fail $original_size 0 0B 0B none $rel_path" > "$result_file"
         echo -e "  ${RED}FAILED${NC} $rel_path"
     fi
 }
@@ -333,10 +335,12 @@ process_single_image() {
         if [ "$original_size" -gt 0 ]; then
             savings_pct=$((savings * 100 / original_size))
         fi
-        echo "ok $original_size $new_size $level $rel_path" > "$result_file"
-        echo -e "  ${GREEN}OK${NC} $rel_path [$level] ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+        local orig_hr=$(format_size $original_size)
+        local new_hr=$(format_size $new_size)
+        echo "ok $original_size $new_size $orig_hr $new_hr $level $rel_path" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path [$level] ($orig_hr → $new_hr, -${savings_pct}%)"
     else
-        echo "fail $original_size 0 none $rel_path" > "$result_file"
+        echo "fail $original_size 0 0B 0B none $rel_path" > "$result_file"
         echo -e "  ${RED}FAILED${NC} $rel_path"
     fi
 }
@@ -695,7 +699,7 @@ fi
 CSV_ROWS=()
 for result_file in "$RESULTS_DIR"/*.result; do
     [ -f "$result_file" ] || continue
-    read -r status orig_size new_size compression_level file_name < "$result_file"
+    read -r status orig_size new_size orig_hr new_hr compression_level file_name < "$result_file"
     if [ "$status" = "ok" ]; then
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + orig_size))
@@ -704,7 +708,7 @@ for result_file in "$RESULTS_DIR"/*.result; do
         if [ "$orig_size" -gt 0 ]; then
             local_pct=$(( (orig_size - new_size) * 100 / orig_size ))
         fi
-        CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct,$compression_level")
+        CSV_ROWS+=("$file_name,$orig_size,$new_size,$orig_hr,$new_hr,$local_pct,$compression_level")
     else
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
@@ -767,7 +771,7 @@ else
         # Write CSV report
         CSV_FILE="$OUTPUT_DIR/optimization-report.csv"
         {
-            echo "file_name,original_size,optimized_size,percent_saved,compression_level"
+            echo "file_name,original_size,optimized_size,original_size_mb,optimized_size_mb,percent_saved,compression_level"
             for row in "${CSV_ROWS[@]}"; do
                 echo "$row"
             done
