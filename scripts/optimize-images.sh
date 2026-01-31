@@ -11,7 +11,7 @@ set -e
 #   ./optimize-images.sh <input...> [options]
 #
 # Dependencies:
-#   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp bc
+#   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl bc
 # =============================================================================
 
 # Colors for output
@@ -49,6 +49,7 @@ print_usage() {
     echo "  -d, --dry-run           Preview what would be processed without making changes"
     echo "  -r, --recursive         Traverse subdirectories (default: top-level only)"
     echo "  -w, --webp              Generate WebP versions of optimized images"
+    echo "  -f, --force             Re-optimize even if already marked as optimized"
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
@@ -95,13 +96,14 @@ check_dependencies() {
     command -v optipng >/dev/null 2>&1 || missing+=("optipng")
     command -v gifsicle >/dev/null 2>&1 || missing+=("gifsicle")
     command -v cwebp >/dev/null 2>&1 || missing+=("webp")
+    command -v exiftool >/dev/null 2>&1 || missing+=("libimage-exiftool-perl")
     command -v bc >/dev/null 2>&1 || missing+=("bc")
 
     if [ ${#missing[@]} -ne 0 ]; then
         log_error "Missing dependencies: ${missing[*]}"
         echo ""
         echo "Install with:"
-        echo "  sudo apt-get install imagemagick jpegoptim optipng gifsicle webp bc"
+        echo "  sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl bc"
         exit 1
     fi
 }
@@ -127,6 +129,18 @@ needs_optimization() {
     fi
 
     return 1
+}
+
+is_already_optimized() {
+    local file="$1"
+    local comment
+    comment=$(exiftool -s3 -Comment "$file" 2>/dev/null)
+    [ "$comment" = "philoassets-optimized" ]
+}
+
+stamp_optimized() {
+    local file="$1"
+    exiftool -overwrite_original -Comment="philoassets-optimized" "$file" >/dev/null 2>&1
 }
 
 # -----------------------------------------------------------------------------
@@ -155,6 +169,8 @@ optimize_jpeg() {
     if [ "$GENERATE_WEBP" = true ]; then
         cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
     fi
+
+    stamp_optimized "$output"
 }
 
 optimize_png() {
@@ -178,6 +194,8 @@ optimize_png() {
     if [ "$GENERATE_WEBP" = true ]; then
         cwebp -q "$WEBP_QUALITY" -quiet "$output" -o "${output}.webp"
     fi
+
+    stamp_optimized "$output"
 }
 
 optimize_gif() {
@@ -198,6 +216,8 @@ optimize_gif() {
         cwebp -q "$WEBP_QUALITY" -quiet "$tmp_frame" -o "${output}.webp"
         rm -f "$tmp_frame"
     fi
+
+    stamp_optimized "$output"
 }
 
 optimize_webp() {
@@ -210,6 +230,8 @@ optimize_webp() {
     # Resize and recompress
     cwebp -q "$WEBP_QUALITY" -quiet -resize "$MAX_DIMENSION" 0 "$input" -o "$output" 2>/dev/null || \
         cwebp -q "$WEBP_QUALITY" -quiet "$input" -o "$output"
+
+    stamp_optimized "$output"
 }
 
 process_image() {
@@ -248,12 +270,14 @@ OUTPUT_DIR="./optimized"
 DRY_RUN=false
 RECURSIVE=false
 GENERATE_WEBP=false
+FORCE=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run|-d)   DRY_RUN=true ;;
         --recursive|-r) RECURSIVE=true ;;
         --webp|-w)      GENERATE_WEBP=true ;;
+        --force|-f)     FORCE=true ;;
         --output|-o)
             shift
             OUTPUT_DIR="${1:?'--output requires a directory argument'}"
@@ -303,6 +327,7 @@ log_info "Max dimension: ${MAX_DIMENSION}px"
 log_info "Dry run: $DRY_RUN"
 log_info "Recursive: $RECURSIVE"
 log_info "WebP generation: $GENERATE_WEBP"
+log_info "Force: $FORCE"
 echo ""
 
 # Collect all images from inputs
@@ -355,8 +380,14 @@ for image in "${IMAGES[@]}"; do
     fi
     output_path="$OUTPUT_DIR/$rel_path"
 
-    # Check if already processed
-    if [ -f "$output_path" ] && [ "$DRY_RUN" = false ]; then
+    # Check if already processed (output exists)
+    if [ -f "$output_path" ] && [ "$DRY_RUN" = false ] && [ "$FORCE" = false ]; then
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+    fi
+
+    # Check if already optimized (metadata marker)
+    if [ "$FORCE" = false ] && is_already_optimized "$image"; then
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
