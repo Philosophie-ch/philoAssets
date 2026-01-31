@@ -324,8 +324,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Clamp JOBS to available CPU cores (leave one core free)
-MAX_JOBS=$(( $(nproc 2>/dev/null || echo 2) - 1 ))
+# Clamp JOBS to 1/4 of available CPU cores to prevent thermal overload
+AVAILABLE_CORES=$(nproc 2>/dev/null || echo 2)
+MAX_JOBS=$(( AVAILABLE_CORES / 4 ))
 if [ "$MAX_JOBS" -lt 1 ]; then
     MAX_JOBS=1
 fi
@@ -492,7 +493,7 @@ if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
         output_path="${TO_PROCESS[$i+1]}"
         rel_path="${TO_PROCESS[$i+2]}"
 
-        process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path" &
+        nice -n 19 process_single_image "$image" "$output_path" "$RESULTS_DIR/$job_index.result" "$rel_path" &
         active_jobs=$((active_jobs + 1))
         job_index=$((job_index + 1))
 
