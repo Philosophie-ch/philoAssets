@@ -38,6 +38,15 @@ FAILED_COUNT=0
 # Helper Functions
 # -----------------------------------------------------------------------------
 
+parse_size() {
+    local val="$1"
+    case "${val^^}" in
+        *MB) echo $(( ${val%%[Mm]*} * 1048576 )) ;;
+        *KB) echo $(( ${val%%[Kk]*} * 1024 )) ;;
+        *)   echo "$val" ;;
+    esac
+}
+
 print_usage() {
     echo "Usage: $0 <input...> [options]"
     echo ""
@@ -50,6 +59,7 @@ print_usage() {
     echo "  -r, --recursive         Traverse subdirectories (default: top-level only)"
     echo "  -w, --webp              Generate WebP versions of optimized images"
     echo "  -f, --force             Re-optimize even if already marked as optimized"
+    echo "  -s, --size-threshold <size>  Min file size to optimize (default: 1MB, e.g. 500KB, 2MB)"
     echo "  -j, --jobs <N>          Max parallel jobs (default: 3)"
     echo "  -h, --help              Show this help message"
     echo ""
@@ -296,6 +306,10 @@ while [ $# -gt 0 ]; do
         --recursive|-r) RECURSIVE=true ;;
         --webp|-w)      GENERATE_WEBP=true ;;
         --force|-f)     FORCE=true ;;
+        --size-threshold|-s)
+            shift
+            SIZE_THRESHOLD_BYTES=$(parse_size "${1:?'--size-threshold requires a size value'}")
+            ;;
         --jobs|-j)
             shift
             JOBS="${1:?'--jobs requires a number'}"
