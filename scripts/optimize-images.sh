@@ -11,7 +11,7 @@ set -e
 #   ./optimize-images.sh <input...> [options]
 #
 # Dependencies:
-#   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl bc
+#   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl
 # =============================================================================
 
 # Colors for output
@@ -80,9 +80,13 @@ log_error() {
 format_size() {
     local bytes=$1
     if [ "$bytes" -ge 1048576 ]; then
-        echo "$(echo "scale=2; $bytes / 1048576" | bc)MB"
+        local mb_int=$((bytes / 1048576))
+        local mb_frac=$(( (bytes % 1048576) * 100 / 1048576 ))
+        printf '%d.%02dMB' "$mb_int" "$mb_frac"
     elif [ "$bytes" -ge 1024 ]; then
-        echo "$(echo "scale=2; $bytes / 1024" | bc)KB"
+        local kb_int=$((bytes / 1024))
+        local kb_frac=$(( (bytes % 1024) * 100 / 1024 ))
+        printf '%d.%02dKB' "$kb_int" "$kb_frac"
     else
         echo "${bytes}B"
     fi
@@ -98,30 +102,29 @@ check_dependencies() {
     command -v gifsicle >/dev/null 2>&1 || missing+=("gifsicle")
     command -v cwebp >/dev/null 2>&1 || missing+=("webp")
     command -v exiftool >/dev/null 2>&1 || missing+=("libimage-exiftool-perl")
-    command -v bc >/dev/null 2>&1 || missing+=("bc")
-
     if [ ${#missing[@]} -ne 0 ]; then
         log_error "Missing dependencies: ${missing[*]}"
         echo ""
         echo "Install with:"
-        echo "  sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl bc"
+        echo "  sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl"
         exit 1
     fi
 }
 
 needs_optimization() {
     local file="$1"
-    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+    local dimensions="$2"
+    local size
+    size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
 
     # Check file size
     if [ "$size" -gt "$SIZE_THRESHOLD_BYTES" ]; then
         return 0
     fi
 
-    # Check dimensions
-    local dimensions=$(identify -format "%wx%h" "$file" 2>/dev/null | head -1)
-    local width=$(echo "$dimensions" | cut -d'x' -f1)
-    local height=$(echo "$dimensions" | cut -d'x' -f2)
+    # Check dimensions (passed in from pre-built map)
+    local width="${dimensions%%x*}"
+    local height="${dimensions##*x}"
 
     if [ -n "$width" ] && [ -n "$height" ]; then
         if [ "$width" -gt "$MAX_DIMENSION" ] || [ "$height" -gt "$MAX_DIMENSION" ]; then
@@ -151,9 +154,6 @@ stamp_optimized() {
 optimize_jpeg() {
     local input="$1"
     local output="$2"
-    local output_dir=$(dirname "$output")
-
-    mkdir -p "$output_dir"
 
     # Resize if needed and compress (convert to sRGB before stripping profiles)
     convert "$input" \
@@ -177,9 +177,6 @@ optimize_jpeg() {
 optimize_png() {
     local input="$1"
     local output="$2"
-    local output_dir=$(dirname "$output")
-
-    mkdir -p "$output_dir"
 
     # Resize if needed (convert to sRGB before stripping profiles to preserve colors)
     convert "$input" \
@@ -204,8 +201,6 @@ optimize_gif() {
     local output="$2"
     local output_dir=$(dirname "$output")
 
-    mkdir -p "$output_dir"
-
     # Optimize GIF
     gifsicle --optimize=3 "$input" -o "$output"
 
@@ -224,9 +219,6 @@ optimize_gif() {
 optimize_webp() {
     local input="$1"
     local output="$2"
-    local output_dir=$(dirname "$output")
-
-    mkdir -p "$output_dir"
 
     # Resize and recompress
     cwebp -q "$WEBP_QUALITY" -quiet -resize "$MAX_DIMENSION" 0 "$input" -o "$output" 2>/dev/null || \
@@ -409,6 +401,22 @@ echo ""
 RESULTS_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULTS_DIR"' EXIT
 
+# Pre-check optimization markers in bulk (single exiftool invocation)
+declare -A OPTIMIZED_MAP
+if [ "$FORCE" = false ]; then
+    while IFS='|' read -r file comment; do
+        if [ "$comment" = "philoassets-optimized" ]; then
+            OPTIMIZED_MAP["$file"]=1
+        fi
+    done < <(exiftool -p '$Directory/$FileName|$Comment' "${IMAGES[@]}" 2>/dev/null)
+fi
+
+# Pre-read dimensions in bulk (single identify invocation)
+declare -A DIMENSIONS_MAP
+while IFS='|' read -r file dims; do
+    DIMENSIONS_MAP["$file"]="$dims"
+done < <(identify -format '%d/%f|%wx%h\n' "${IMAGES[@]}" 2>/dev/null | sort -u -t'|' -k1,1)
+
 # Phase 1: Filter images (sequential)
 TO_PROCESS=()
 for image in "${IMAGES[@]}"; do
@@ -431,17 +439,17 @@ for image in "${IMAGES[@]}"; do
         continue
     fi
 
-    # Check if already optimized (metadata marker)
-    if [ "$FORCE" = false ] && is_already_optimized "$image"; then
+    # Check if already optimized (metadata marker from bulk pre-read)
+    if [ "$FORCE" = false ] && [ "${OPTIMIZED_MAP[$image]+_}" ]; then
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
-    # Check if needs optimization
-    if needs_optimization "$image"; then
+    # Check if needs optimization (dimensions from bulk pre-read)
+    dimensions="${DIMENSIONS_MAP[$image]}"
+    if needs_optimization "$image" "$dimensions"; then
         if [ "$DRY_RUN" = true ]; then
             original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
-            dimensions=$(identify -format "%wx%h" "$image" 2>/dev/null | head -1)
             echo -e "  ${YELLOW}[WOULD PROCESS]${NC} $rel_path ($(format_size $original_size), ${dimensions})"
             PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         else
@@ -449,6 +457,16 @@ for image in "${IMAGES[@]}"; do
         fi
     else
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+    fi
+done
+
+# Pre-create output directories
+declare -A SEEN_DIRS
+for ((i=1; i<${#TO_PROCESS[@]}; i+=3)); do
+    dir=$(dirname "${TO_PROCESS[$i]}")
+    if [ -z "${SEEN_DIRS[$dir]+_}" ]; then
+        SEEN_DIRS["$dir"]=1
+        mkdir -p "$dir"
     fi
 done
 
