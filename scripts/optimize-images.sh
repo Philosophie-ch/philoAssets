@@ -26,6 +26,7 @@ SIZE_THRESHOLD_BYTES=1048576  # 1MB in bytes
 MAX_DIMENSION=1920
 JPEG_QUALITY=92
 WEBP_QUALITY=90
+AGGRESSIVE_QUALITY=75
 
 # Counters for summary
 TOTAL_ORIGINAL_SIZE=0
@@ -61,6 +62,9 @@ print_usage() {
     echo "  -f, --force             Re-optimize even if already marked as optimized"
     echo "  -s, --size-threshold <size>  Min file size to optimize (default: 1MB, e.g. 500KB, 2MB)"
     echo "  -j, --jobs <N>          Max parallel jobs (default: 3)"
+    echo "  -a, --aggressive        Second pass: convert large files to WebP for more savings"
+    echo "  --aggressive-quality <N>  WebP quality for aggressive re-encode (default: 75)"
+    echo "  --aggressive-output <dir>  Output folder for aggressive pass (default: ./aggressive)"
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
@@ -69,6 +73,8 @@ print_usage() {
     echo "  $0 ./uploads -r -w                    # recursive + webp generation"
     echo "  $0 image1.png image2.jpg -o ./out      # optimize specific files"
     echo "  $0 ./uploads ./photos -r -o ./out      # multiple directories"
+    echo "  $0 ./uploads -a                         # optimize + aggressive WebP pass"
+    echo "  $0 ./uploads -a --aggressive-quality 60  # even more aggressive"
 }
 
 log_info() {
@@ -236,6 +242,57 @@ optimize_webp() {
     stamp_optimized "$output"
 }
 
+aggressive_compress() {
+    local input="$1"
+    local output="$2"
+    local ext_lower
+    ext_lower=$(echo "${input##*.}" | tr '[:upper:]' '[:lower:]')
+
+    # Step 1: Convert to WebP if not already
+    local webp_output="${output%.*}.webp"
+    if [ "$ext_lower" != "webp" ]; then
+        cwebp -q "$WEBP_QUALITY" -quiet "$input" -o "$webp_output"
+    else
+        cp "$input" "$webp_output"
+    fi
+
+    # Step 2: If still above threshold, re-encode at lower quality
+    local size
+    size=$(stat -c%s "$webp_output" 2>/dev/null || stat -f%z "$webp_output" 2>/dev/null)
+    if [ "$size" -gt "$SIZE_THRESHOLD_BYTES" ]; then
+        local tmp_webp="${webp_output}.tmp"
+        cwebp -q "$AGGRESSIVE_QUALITY" -quiet "$webp_output" -o "$tmp_webp"
+        mv "$tmp_webp" "$webp_output"
+    fi
+
+    exiftool -overwrite_original -Comment="philoassets-aggressive" "$webp_output" >/dev/null 2>&1
+}
+
+process_single_aggressive() {
+    local image="$1"
+    local output_path="$2"
+    local result_file="$3"
+    local rel_path="$4"
+    local original_size
+    original_size=$(stat -c%s "$image" 2>/dev/null || stat -f%z "$image" 2>/dev/null)
+
+    if aggressive_compress "$image" "$output_path"; then
+        local webp_output="${output_path%.*}.webp"
+        local new_size
+        new_size=$(stat -c%s "$webp_output" 2>/dev/null || stat -f%z "$webp_output" 2>/dev/null)
+        local savings=$((original_size - new_size))
+        local savings_pct=0
+        if [ "$original_size" -gt 0 ]; then
+            savings_pct=$((savings * 100 / original_size))
+        fi
+        echo "ok $original_size $new_size ${rel_path%.*}.webp" > "$result_file"
+        echo -e "  ${GREEN}OK${NC} $rel_path → ${rel_path%.*}.webp ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
+    else
+        echo "fail $original_size 0 $rel_path" > "$result_file"
+        echo -e "  ${RED}FAILED${NC} $rel_path"
+    fi
+}
+
 process_single_image() {
     local image="$1"
     local output_path="$2"
@@ -252,10 +309,10 @@ process_single_image() {
         if [ "$original_size" -gt 0 ]; then
             savings_pct=$((savings * 100 / original_size))
         fi
-        echo "ok $original_size $new_size" > "$result_file"
+        echo "ok $original_size $new_size $rel_path" > "$result_file"
         echo -e "  ${GREEN}OK${NC} $rel_path ($(format_size $original_size) → $(format_size $new_size), -${savings_pct}%)"
     else
-        echo "fail $original_size 0" > "$result_file"
+        echo "fail $original_size 0 $rel_path" > "$result_file"
         echo -e "  ${RED}FAILED${NC} $rel_path"
     fi
 }
@@ -297,6 +354,8 @@ DRY_RUN=false
 RECURSIVE=false
 GENERATE_WEBP=false
 FORCE=false
+AGGRESSIVE=false
+AGGRESSIVE_OUTPUT="./aggressive"
 JOBS=3
 
 while [ $# -gt 0 ]; do
@@ -305,6 +364,15 @@ while [ $# -gt 0 ]; do
         --recursive|-r) RECURSIVE=true ;;
         --webp|-w)      GENERATE_WEBP=true ;;
         --force|-f)     FORCE=true ;;
+        --aggressive|-a) AGGRESSIVE=true ;;
+        --aggressive-quality)
+            shift
+            AGGRESSIVE_QUALITY="${1:?'--aggressive-quality requires a number'}"
+            ;;
+        --aggressive-output)
+            shift
+            AGGRESSIVE_OUTPUT="${1:?'--aggressive-output requires a directory argument'}"
+            ;;
         --size-threshold|-s)
             shift
             SIZE_THRESHOLD_BYTES=$(parse_size "${1:?'--size-threshold requires a size value'}")
@@ -373,6 +441,7 @@ log_info "Dry run: $DRY_RUN"
 log_info "Recursive: $RECURSIVE"
 log_info "WebP generation: $GENERATE_WEBP"
 log_info "Force: $FORCE"
+log_info "Aggressive mode: $AGGRESSIVE"
 log_info "Parallel jobs: $JOBS"
 echo ""
 
@@ -509,17 +578,119 @@ if [ "$DRY_RUN" = false ] && [ ${#TO_PROCESS[@]} -gt 0 ]; then
 fi
 
 # Phase 3: Aggregate results
+CSV_ROWS=()
 for result_file in "$RESULTS_DIR"/*.result; do
     [ -f "$result_file" ] || continue
-    read -r status orig_size new_size < "$result_file"
+    read -r status orig_size new_size file_name < "$result_file"
     if [ "$status" = "ok" ]; then
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
         TOTAL_ORIGINAL_SIZE=$((TOTAL_ORIGINAL_SIZE + orig_size))
         TOTAL_OPTIMIZED_SIZE=$((TOTAL_OPTIMIZED_SIZE + new_size))
+        local_pct=0
+        if [ "$orig_size" -gt 0 ]; then
+            local_pct=$(( (orig_size - new_size) * 100 / orig_size ))
+        fi
+        CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct")
     else
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 done
+
+# Phase 4: Aggressive pass (convert large files to WebP)
+AGG_PROCESSED=0
+AGG_ORIGINAL_SIZE=0
+AGG_COMPRESSED_SIZE=0
+
+if [ "$AGGRESSIVE" = true ] && [ "$DRY_RUN" = false ] && [ "$PROCESSED_COUNT" -gt 0 ]; then
+    echo ""
+    log_info "Aggressive pass: converting large files to WebP..."
+    echo ""
+
+    # Convert aggressive output to absolute path
+    case "$AGGRESSIVE_OUTPUT" in
+        /*) ;;
+        *)  AGGRESSIVE_OUTPUT="$(pwd)/$AGGRESSIVE_OUTPUT" ;;
+    esac
+    mkdir -p "$AGGRESSIVE_OUTPUT"
+
+    # Scan optimized output for files still above threshold
+    AGG_CANDIDATES=()
+    while IFS= read -r f; do
+        local_size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
+        if [ "$local_size" -gt "$SIZE_THRESHOLD_BYTES" ]; then
+            # Skip if already aggressively compressed (check metadata)
+            if [ "$FORCE" = false ]; then
+                comment=$(exiftool -s3 -Comment "$f" 2>/dev/null)
+                if [ "$comment" = "philoassets-aggressive" ]; then
+                    continue
+                fi
+            fi
+            AGG_CANDIDATES+=("$f")
+        fi
+    done < <(find "$OUTPUT_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) 2>/dev/null)
+
+    if [ ${#AGG_CANDIDATES[@]} -gt 0 ]; then
+        log_info "Found ${#AGG_CANDIDATES[@]} files above $(format_size $SIZE_THRESHOLD_BYTES) for aggressive compression"
+        echo ""
+
+        # Build processing list with output paths
+        AGG_TO_PROCESS=()
+        declare -A AGG_SEEN_DIRS
+        for candidate in "${AGG_CANDIDATES[@]}"; do
+            rel="${candidate#$OUTPUT_DIR/}"
+            agg_output="$AGGRESSIVE_OUTPUT/$rel"
+            agg_dir=$(dirname "$agg_output")
+            if [ -z "${AGG_SEEN_DIRS[$agg_dir]+_}" ]; then
+                AGG_SEEN_DIRS["$agg_dir"]=1
+                mkdir -p "$agg_dir"
+            fi
+            AGG_TO_PROCESS+=("$candidate" "$agg_output" "$rel")
+        done
+
+        # Parallel aggressive processing
+        AGG_RESULTS_DIR=$(mktemp -d)
+        agg_active=0
+        agg_idx=0
+        for ((i=0; i<${#AGG_TO_PROCESS[@]}; i+=3)); do
+            agg_image="${AGG_TO_PROCESS[$i]}"
+            agg_out="${AGG_TO_PROCESS[$i+1]}"
+            agg_rel="${AGG_TO_PROCESS[$i+2]}"
+
+            (
+                renice -n 19 $BASHPID >/dev/null 2>&1 || true
+                process_single_aggressive "$agg_image" "$agg_out" "$AGG_RESULTS_DIR/$agg_idx.result" "$agg_rel"
+            ) &
+            agg_active=$((agg_active + 1))
+            agg_idx=$((agg_idx + 1))
+
+            if [ "$agg_active" -ge "$JOBS" ]; then
+                wait -n || true
+                agg_active=$((agg_active - 1))
+            fi
+        done
+        wait || true
+
+        # Aggregate aggressive results
+        AGG_CSV_ROWS=()
+        for result_file in "$AGG_RESULTS_DIR"/*.result; do
+            [ -f "$result_file" ] || continue
+            read -r status orig_size new_size file_name < "$result_file"
+            if [ "$status" = "ok" ]; then
+                AGG_PROCESSED=$((AGG_PROCESSED + 1))
+                AGG_ORIGINAL_SIZE=$((AGG_ORIGINAL_SIZE + orig_size))
+                AGG_COMPRESSED_SIZE=$((AGG_COMPRESSED_SIZE + new_size))
+                local_pct=0
+                if [ "$orig_size" -gt 0 ]; then
+                    local_pct=$(( (orig_size - new_size) * 100 / orig_size ))
+                fi
+                AGG_CSV_ROWS+=("$file_name,$orig_size,$new_size,$local_pct")
+            fi
+        done
+        rm -rf "$AGG_RESULTS_DIR"
+    else
+        log_info "No files above $(format_size $SIZE_THRESHOLD_BYTES) after optimization — aggressive pass skipped"
+    fi
+fi
 
 # Summary
 echo ""
@@ -569,6 +740,40 @@ else
 
         echo ""
         log_info "Report saved to: $REPORT_FILE"
+
+        # Write CSV report
+        CSV_FILE="$OUTPUT_DIR/optimization-report.csv"
+        {
+            echo "file_name,original_size,optimized_size,percent_saved"
+            for row in "${CSV_ROWS[@]}"; do
+                echo "$row"
+            done
+        } > "$CSV_FILE"
+        log_info "CSV report saved to: $CSV_FILE"
+    fi
+
+    if [ "$AGGRESSIVE" = true ] && [ "$AGG_PROCESSED" -gt 0 ]; then
+        echo ""
+        log_info "--- Aggressive pass ---"
+        log_info "Files re-compressed: $AGG_PROCESSED"
+        agg_savings=$((AGG_ORIGINAL_SIZE - AGG_COMPRESSED_SIZE))
+        if [ "$AGG_ORIGINAL_SIZE" -gt 0 ]; then
+            agg_savings_pct=$((agg_savings * 100 / AGG_ORIGINAL_SIZE))
+            log_info "Aggressive input size:  $(format_size $AGG_ORIGINAL_SIZE)"
+            log_info "Aggressive output size: $(format_size $AGG_COMPRESSED_SIZE)"
+            log_success "Aggressive savings: $(format_size $agg_savings) (-${agg_savings_pct}%)"
+        fi
+        log_info "Aggressive output: $AGGRESSIVE_OUTPUT"
+
+        # Write aggressive CSV report
+        AGG_CSV_FILE="$AGGRESSIVE_OUTPUT/aggressive-report.csv"
+        {
+            echo "file_name,original_size,optimized_size,percent_saved"
+            for row in "${AGG_CSV_ROWS[@]}"; do
+                echo "$row"
+            done
+        } > "$AGG_CSV_FILE"
+        log_info "Aggressive CSV report saved to: $AGG_CSV_FILE"
     fi
 fi
 
