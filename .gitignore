@@ -76,3 +76,5 @@ docker-volume/
 
 # Logs
 *.log
+
+.claude
