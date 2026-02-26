@@ -34,7 +34,7 @@ Internet (ports 80, 443)
 | Service | Purpose | Technology |
 |---------|---------|------------|
 | **nginx-proxy-manager** | Entry point, reverse proxy, SSL management | jc21/nginx-proxy-manager |
-| **nginx-static** | High-performance static file serving | nginx:latest |
+| **nginx-static** | High-performance static file serving | nginx:1.29.4 |
 | **filebrowser** | Web-based file management interface | filebrowser/filebrowser |
 
 ## Directory Structure
@@ -58,8 +58,16 @@ philoAssets/
 │
 ├── assets/                     # Static file storage
 │
+├── scripts/
+│   └── optimize-images.sh      # Batch image optimization (non-destructive)
+│
+├── deploy-secure.sh            # First-time setup and full redeploy with optional secret rotation
+├── check.sh                    # Health check: env, containers, nginx config, signed URL tests
+├── redeploy.sh                 # Quick redeploy wrapper (keeps existing secret)
+│
 └── docs/                       # Documentation
-    └── general-context.md      # This file
+    ├── general-context.md      # This file
+    └── deployment.md           # Step-by-step deployment checklist
 ```
 
 ## Key Configuration Files
@@ -187,6 +195,17 @@ Client applications generate these URLs using a shared secret (`ASSETS_SIGNING_S
 | 410 | Expired signature |
 | 404 | File not found |
 
+## Health and Mode Endpoint
+
+The nginx-static container exposes a no-auth endpoint for client auto-detection:
+
+```
+GET /.well-known/access-mode
+→ 200 text/plain: "signed_url"
+```
+
+Clients can query this endpoint to determine whether signed URLs are required before attempting asset requests. No signature parameters are needed for this path.
+
 ## Common Operations
 
 ### Starting/Stopping Services
@@ -209,8 +228,36 @@ docker compose logs -f nginx-static # Specific service
 - Use FileBrowser web interface for upload/download/management
 - Or directly access the `${ASSETS_DIR}` directory on the host
 
+## Scripts
+
+### redeploy.sh
+
+Quick redeploy wrapper that keeps the existing signing secret. Use when changing nginx config or docker-compose settings without rotating the secret. Internally calls `deploy-secure.sh` with auto-answer `n` on the secret rotation prompt.
+
+```bash
+./redeploy.sh
+```
+
+### scripts/optimize-images.sh
+
+Batch image optimizer. Identifies images over 1 MB or 1920px and compresses them non-destructively. Outputs to `./optimized/` by default.
+
+Supported formats: JPEG, PNG, GIF, WebP.
+
+Dependencies: `imagemagick`, `jpegoptim`, `optipng`, `gifsicle`, `webp`, `libimage-exiftool-perl`.
+
+```bash
+./scripts/optimize-images.sh <input-dir-or-files> [options]
+./scripts/optimize-images.sh --help    # See all options
+```
+
+Key options: `--aggressive` (iterative WebP re-encode until under 1MB), `--dry-run`, `--recursive`, `--jobs N`.
+
+Generates `optimization-report.csv` and `optimization-report.txt` in the output directory.
+
 ## Further Reading
 
 - [README.md](../README.md) - Detailed setup instructions
+- [Deployment Checklist](deployment.md) - Step-by-step deployment and CDN purge instructions
 - [Nginx Proxy Manager Docs](https://nginxproxymanager.com/)
 - [FileBrowser Docs](https://filebrowser.org/)
