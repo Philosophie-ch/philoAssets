@@ -10,6 +10,9 @@ set -e
 # Usage:
 #   ./optimize-images.sh <input...> [options]
 #
+# Examples:
+#   1. Optimize all images in a folder (non-recursive, force aggressive):
+# ./optimize-images.sh YOUR_FOLDER -w && optimize-images.sh ./optimized -a -s 1KB
 # Dependencies:
 #   sudo apt-get install imagemagick jpegoptim optipng gifsicle webp libimage-exiftool-perl
 # =============================================================================
