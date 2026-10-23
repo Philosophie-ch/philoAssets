@@ -13,6 +13,11 @@ services:
       - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
     networks:
       - philo-assets-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # Static files server with signed URL validation
   nginx-static:
@@ -26,11 +31,17 @@ services:
       - ./nginx-static/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     networks:
       - philo-assets-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # FileBrowser GUI + API
   filebrowser:
     image: filebrowser/filebrowser:v2.31.2
     container_name: filebrowser
+    restart: unless-stopped
     volumes:
       - ${ASSETS_DIR}:/srv
       - ./filebrowser/database.db:/database.db  # Keep an empty file here so the app can have the correct permissions
@@ -39,6 +50,11 @@ services:
     user: "${UID}:${GID}"
     networks:
       - philo-assets-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
 networks:
   philo-assets-network:
