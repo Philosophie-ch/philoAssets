@@ -137,12 +137,8 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}Stopping containers...${NC}"
-docker compose down
-
-echo ""
-echo -e "${YELLOW}Starting containers...${NC}"
-docker compose up -d
+echo -e "${YELLOW}Recreating containers...${NC}"
+docker compose up -d --force-recreate --remove-orphans
 
 echo ""
 echo -e "${YELLOW}Waiting for nginx to start...${NC}"
