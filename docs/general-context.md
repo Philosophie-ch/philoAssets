@@ -34,7 +34,7 @@ Internet (ports 80, 443)
 | Service | Purpose | Technology |
 |---------|---------|------------|
 | **nginx-proxy-manager** | Entry point, reverse proxy, SSL management | jc21/nginx-proxy-manager |
-| **nginx-static** | High-performance static file serving | nginx:1.29.4 |
+| **nginx-static** | High-performance static file serving | nginx |
 | **filebrowser** | Web-based file management interface | filebrowser/filebrowser |
 
 ## Directory Structure
